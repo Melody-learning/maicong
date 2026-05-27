@@ -38,6 +38,9 @@
 - `.env.example`：云端 API 和本地 receiver 的环境变量占位示例，不包含真实 token。
 - `docs/vercel-deployment.md`：GitHub + Vercel + Upstash Redis 手动部署和 smoke test 指南。
 - `docs/vercel-upstash-smoke-test-report.md`：Vercel + Upstash + 本地 receiver + 真实 K20 GT 屏幕的线上闭环验证记录。
+- `docs/web-message-sender.md`：第一版网页发送入口的使用、token 存储和手动验证说明。
+- `docs/web-message-sender-smoke-test-report.md`：本地网页发送入口到真实 K20 GT 屏幕的 smoke test 记录。
+- `public/`：Vercel 根路径网页发送入口，调用现有消息 API。
 - `openspec/`：后续需求稳定后，用于记录正式变更、设计和规格。
 
 ## 当前迭代进度
@@ -50,6 +53,7 @@
 - OpenSpec change `add-local-message-receiver` 已实现第一版本地 Node.js receiver：从环境变量读取远程 API 地址和 receiver token，按间隔轮询 `next`，有消息时复用 HID 写屏模块，写屏成功后 ack；API/JSON/ack/写屏失败不会让循环崩溃，Ctrl+C 可退出。本 change 不包含托盘、暂停/勿扰、自启动、Windows 服务或发送 UI。
 - OpenSpec change `prepare-vercel-github-deployment` 已完成并归档第一版提交部署准备：补齐 `.gitignore`、`.env.example`、GitHub + Vercel + Upstash Redis 手动部署文档、线上 API smoke test 和 receiver 联调步骤。
 - 2026-05-27 已完成真实线上闭环验证：GitHub 仓库已连接 Vercel，Upstash Redis 通过 Vercel KV 兼容环境变量工作，线上 API 可创建/拉取/ack/clear 消息，本地 receiver 已连接生产 Vercel API 并把远程 transient 消息显示到真实 `MCHOSE K20 GT` 屏幕。
+- OpenSpec change `add-web-message-sender` 已实现第一版极简网页发送入口：Vercel 根路径提供实际发送工具，用户在浏览器输入 `SEND_TOKEN` 后可发送“贴上去”/“显示一下”并清空当前 sticky；页面不要求也不暴露 `RECEIVER_TOKEN`。2026-05-28 已完成本地网页到真实 K20 GT 屏幕 smoke test：`http://localhost:3000/` -> 本地 Vercel API -> Upstash Redis -> 本地 receiver -> HID 写屏 -> K20 GT，用户手动测试网页确认可用。本 change 不包含登录、多用户、多设备、Telegram/微信、receiver 托盘/自启动/勿扰、长文本策略、声音/TTS 或 Deployment Protection bypass。
 - `probe-long-text-display` 后续继续探测长文本、滚动、歌词层和自定义文字层边界；远程 API 按保守可配置文本限制推进。
 - 后续仍需观察 receiver 在实际长期设备/网络环境下的稳定性，并决定 Vercel Deployment Protection 是否长期保持关闭或引入自动化 bypass 方案。
 
@@ -60,7 +64,7 @@
 3. `add-local-message-receiver`：实现本地 receiver 轮询、写屏、ack 和失败处理。（第一版已完成并归档）
 4. `prepare-vercel-github-deployment`：准备 GitHub + Vercel + Upstash 手动部署材料和安全忽略规则。（第一版已完成并归档）
 5. 真实线上闭环验证：GitHub -> Vercel API -> Upstash Redis -> local receiver -> K20 GT 屏幕。（已完成，见 `docs/vercel-upstash-smoke-test-report.md`）
-6. `add-web-message-sender`：实现极简网页发送入口，包装“贴上去 / 显示一下”。
+6. `add-web-message-sender`：实现极简网页发送入口，包装“贴上去 / 显示一下”。（第一版已完成）
 7. `package-receiver-experience`：补暂停/勿扰、自启动、托盘、配置文件等体验能力。
 
 ## 常用命令
@@ -69,9 +73,10 @@
 npm run screen -- "今天别熬夜"
 npm run receiver
 npm run probe -- help
+npm run vercel:dev
 ```
 
-用途：向已连接的 `MCHOSE K20 GT` 屏幕发送一条短文本，或启动本地 receiver 轮询远程消息。
+用途：向已连接的 `MCHOSE K20 GT` 屏幕发送一条短文本，启动本地 receiver 轮询远程消息，运行探测脚本，或启动 Vercel 本地开发服务打开网页发送入口。
 
 ## 远程投递方向
 
@@ -98,6 +103,7 @@ MCHOSE K20 GT 屏幕
 - 她的电脑不应暴露公网端口。
 - 她电脑端应主动向云端拉取消息，或主动建立长连接。
 - 第一版优先网页投递，后续再接 Telegram 或微信。
+- 第一版网页投递已通过 Vercel 根路径提供极简发送入口；token 由用户在浏览器输入并可本地记住。
 - 接收端最终应做成托盘小程序；当前第一版已可用 Node.js 脚本验证。
 - 第一版验证阶段可使用 Vercel 部署网页和 API，先解决远程投递闭环；Vercel 不作为国内长期稳定可用的最终承诺，后续可迁移到国内云、香港或新加坡节点。
 - 第一版验证阶段的云端存储推荐使用 Vercel 当前支持的轻量 Redis/KV 方案（如 Vercel Marketplace 的 Upstash Redis），用于消息短队列、TTL、状态和限频。

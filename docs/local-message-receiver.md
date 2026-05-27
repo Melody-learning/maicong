@@ -38,4 +38,4 @@ Stop it with Ctrl+C. The receiver stops scheduling new polls and exits cleanly.
 - `displaySeconds` is logged/available for future behavior but does not block the local loop in this version.
 - Screen write failure skips ack and keeps the receiver running.
 - API, ack, and JSON failures are logged and do not crash the loop.
-- Pause/do-not-disturb, tray app packaging, Windows service/autostart, sender UI, bot integrations, multi-device support, and long-text display strategy remain future changes.
+- Pause/do-not-disturb, tray app packaging, Windows service/autostart, bot integrations, multi-device support, and long-text display strategy remain future changes. The first minimal browser sender is documented separately in `docs/web-message-sender.md`.

@@ -198,6 +198,6 @@ Result:
 
 - Observe receiver stability from the actual long-term device/network environment.
 - Decide whether to keep Vercel Authentication disabled or add a documented bypass flow for automation.
-- Add a minimal web sender UI for `sticky` and `transient` messages.
+- Minimal web sender UI for `sticky` and `transient` messages has been implemented and locally verified; see `docs/web-message-sender-smoke-test-report.md`.
 - Package the receiver experience with pause/do-not-disturb, startup, and tray controls.
 - Continue long-text and display-layer probing separately from the deployment path.

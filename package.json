@@ -3,8 +3,8 @@
     "screen": "node k20gt-screen.js",
     "receiver": "node k20gt-receiver.js",
     "probe": "node k20gt-probe.js",
-    "test": "vitest run",
-    "dev": "npx vercel dev"
+    "vercel:dev": "vercel dev",
+    "test": "vitest run"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.0",

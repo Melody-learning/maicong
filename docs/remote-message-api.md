@@ -1,6 +1,6 @@
 # Remote Message API
 
-This change adds only the cloud relay API. The first local receiver is documented separately in `docs/local-message-receiver.md`. It does not add a sender UI, bot integration, tray app, or long-text display strategy.
+This document describes the cloud relay API. The first local receiver is documented separately in `docs/local-message-receiver.md`, and the minimal browser sender is documented in `docs/web-message-sender.md`.
 
 ## Environment Variables
 

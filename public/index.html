@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>K20 GT 小纸条</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="tool" aria-labelledby="page-title">
+        <div class="heading">
+          <p class="eyebrow">K20 GT 屏幕投递</p>
+          <h1 id="page-title">发一条小纸条</h1>
+          <p class="hint">短消息更可靠。发送 token 只保存在这个浏览器里，不要填写 receiver token。</p>
+        </div>
+
+        <form id="sender-form" class="form" novalidate>
+          <label class="field">
+            <span>发送 token</span>
+            <input
+              id="send-token"
+              name="token"
+              type="password"
+              autocomplete="off"
+              placeholder="只填写 SEND_TOKEN"
+              required
+            >
+          </label>
+
+          <label class="remember">
+            <input id="remember-token" type="checkbox" checked>
+            <span>在这个浏览器记住发送 token</span>
+          </label>
+
+          <label class="field">
+            <span>要显示的文字</span>
+            <textarea
+              id="message-text"
+              name="text"
+              rows="5"
+              placeholder="今天别熬夜"
+              required
+            ></textarea>
+          </label>
+
+          <fieldset class="intent-group">
+            <legend>发送方式</legend>
+            <label class="intent-option">
+              <input type="radio" name="intent" value="sticky" checked>
+              <span>
+                <strong>贴上去</strong>
+                <small>作为当前屏幕文字</small>
+              </span>
+            </label>
+            <label class="intent-option">
+              <input type="radio" name="intent" value="transient">
+              <span>
+                <strong>显示一下</strong>
+                <small>临时插入一条提醒</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <div class="actions">
+            <button id="send-button" class="primary" type="submit">发送</button>
+            <button id="clear-button" class="secondary" type="button">清空贴上去</button>
+          </div>
+        </form>
+
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

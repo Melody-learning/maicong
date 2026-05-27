@@ -8,7 +8,7 @@ Target GitHub repository:
 Melody-learning/maicong.git
 ```
 
-This guide does not require any code change to the local receiver and does not add a sender UI.
+This guide does not require any code change to the local receiver. The root path now serves the first minimal browser sender UI after deployment.
 
 ## Safety Rules
 
@@ -65,11 +65,13 @@ git branch -M main
 ```json
 {
   "scripts": {
-    "dev": "npx vercel dev",
+    "vercel:dev": "vercel dev",
     "test": "vitest run"
   }
 }
 ```
+
+Run local Vercel development with `npm run vercel:dev`.
 
 ## 3. Create or Connect Upstash Redis
 
@@ -173,6 +175,25 @@ Expected results:
 - `POST /api/messages/{id}/ack` returns HTTP `200` with `acknowledged`.
 - `POST /api/messages/clear` returns HTTP `200`.
 
+## 5.1 Smoke Test the Web Sender
+
+Open the deployed root page:
+
+```text
+https://your-vercel-project.vercel.app/
+```
+
+Enter only `SEND_TOKEN` in the page. Do not enter `RECEIVER_TOKEN`; it belongs only in Vercel environment variables and on the trusted receiver computer.
+
+Manual checks:
+
+- Send `贴上去` with a short message.
+- Send `显示一下` with a short message.
+- Click `清空贴上去`.
+- Try a wrong token and confirm the page shows `unauthorized`.
+
+The page stores the send token in browser `localStorage` when the remember checkbox is enabled. This is a first-version convenience for trusted browsers.
+
 ## 6. Run the Local Receiver Against Vercel
 
 On the receiver computer:
@@ -208,5 +229,7 @@ The receiver should poll the online API, write the returned text to the connecte
 - [ ] `POST /api/messages` can create a transient message.
 - [ ] `GET /api/messages/next` can pull a message.
 - [ ] `POST /api/messages/{id}/ack` can acknowledge a message.
+- [ ] Root web sender can create `贴上去` and `显示一下` messages with `SEND_TOKEN`.
+- [ ] Root web sender can clear the current sticky with `SEND_TOKEN`.
 - [ ] Local receiver can connect to the deployed API.
 - [ ] Field network stability from the actual receiver location has been observed.
