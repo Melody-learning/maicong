@@ -16,6 +16,14 @@ Browser at http://localhost:3000/
 
 The user also manually tested the web page and confirmed it works.
 
+After commit `4f41054` was pushed to `main`, Vercel deployed the production web sender. The user tested the production root page and confirmed it also works.
+
+Production deployment tested:
+
+```text
+https://maicong-gxbcjko4c-melody-learnings-projects.vercel.app/
+```
+
 ## Environment
 
 - Local Vercel CLI login completed for `melody-learning`.
@@ -111,6 +119,16 @@ Confirmed behavior:
 - User can send through the browser UI.
 - User confirmed the manual web test works.
 
+### Production Web Page Test
+
+After GitHub push and Vercel production deployment, the production root page was opened and tested by the user.
+
+Confirmed behavior:
+
+- Production root path serves the sender tool.
+- User can send through the production browser UI.
+- User confirmed the production web test works.
+
 ## Confirmed Facts
 
 - The first web sender UI is usable locally.
@@ -118,9 +136,9 @@ Confirmed behavior:
 - Local Vercel dev requires real Redis and token values in local environment configuration.
 - Duplicate receiver processes can consume messages invisibly; use one receiver during manual verification.
 - The local-to-device path is now verified for the web sender.
+- The production root page is now verified for the web sender.
 
 ## Follow-Up Items
 
-- Deploy the web sender changes to Vercel and verify the production root page.
 - Continue `probe-long-text-display` separately; this report does not change long-text, scrolling, lyric-layer, or image-protocol conclusions.
 - Package receiver experience later with tray, pause/do-not-disturb, startup, and configuration UX.
