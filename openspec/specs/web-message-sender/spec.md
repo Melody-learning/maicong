@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the first browser-based sender UI for creating K20 GT screen messages and clearing the current sticky message through the existing remote message API.
-
 ## Requirements
-
 ### Requirement: Browser Sender Entry
 The system SHALL provide a browser-accessible sender page in the Vercel project without requiring a frontend framework.
 
@@ -50,9 +48,9 @@ The sender page SHALL allow users to create sticky and transient messages using 
 ### Requirement: Clear Sticky UI
 The sender page SHALL allow users to clear the current sticky message with the send token.
 
-#### Scenario: Clear current sticky
-- **WHEN** a user clicks the clear action with a valid send token
-- **THEN** the page sends `POST /api/messages/clear` with the sender authorization header and reports whether a sticky was cleared.
+#### Scenario: Clear refreshes display status
+- **WHEN** sticky clearing succeeds
+- **THEN** the page refreshes or updates the status area so the cleared state is visible.
 
 ### Requirement: User-Readable API Feedback
 The sender page SHALL show success and failure feedback using API response details where available.
@@ -68,3 +66,26 @@ The sender page SHALL show success and failure feedback using API response detai
 #### Scenario: Known API error appears
 - **WHEN** the API returns errors such as `unauthorized`, `validation_failed`, `rate_limited`, or `queue_full`
 - **THEN** the page shows a readable message that includes the returned error type.
+
+### Requirement: Display Status UI
+The sender page SHALL show the current remote display and receiver status using sender-readable labels.
+
+#### Scenario: Receiver status is shown
+- **WHEN** display status is loaded
+- **THEN** the page shows whether the receiver is recently online and whether receiver-local DND is enabled.
+
+#### Scenario: Current sticky is shown
+- **WHEN** display status includes a current sticky
+- **THEN** the page shows the sticky text and product display state.
+
+#### Scenario: Pending transient count is shown
+- **WHEN** display status includes pending transient messages
+- **THEN** the page shows the pending transient count.
+
+#### Scenario: DND is read-only
+- **WHEN** receiver-local DND is shown in the web sender
+- **THEN** the page does not provide a sender-token DND toggle and indicates that DND is controlled locally.
+
+#### Scenario: Status refresh failure is readable
+- **WHEN** refreshing display status fails
+- **THEN** the page shows a readable error without clearing the send token or exposing receiver token requirements.

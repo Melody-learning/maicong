@@ -1,0 +1,8 @@
+- [x] 1. Add OpenSpec deltas for display status, message end reasons, receiver status sync, and web status controls.
+- [x] 2. Extend remote message model/storage with `endedReason`, `endedAt`, public `displayState`, receiver status storage, and display status summary.
+- [x] 3. Add `GET /api/display/status` and `POST /api/display/status` with sender/receiver token boundaries.
+- [x] 4. Extend receiver config/API helpers/session loop to report status, DND, current display, restore, and failure states without crashing.
+- [x] 5. Extend the web sender status panel and browser helpers using only `SEND_TOKEN`.
+- [x] 6. Add/update storage, API, receiver, and web helper tests for display status and end reasons.
+- [x] 7. Update docs, `.env.example`, and `AGENTS.md` with the first cross-end display status model.
+- [x] 8. Run `npm test` and `openspec validate add-display-status-and-web-controls --strict`.

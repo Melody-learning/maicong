@@ -21,11 +21,22 @@
 - 官方客户端提供“屏幕显示自定义”，文本限制为 32 个字以内。
 - 底层协议中 `cmd 29` 可设置屏幕文字，文本载荷约为 51 字节 UTF-8。
 - 2026-05-27 `length` 视频观察显示，`cmd 29` 默认参数下长于可视区域的文本会尝试跑马灯/滚动；但 1.8 秒默认探测间隔可能不足以完整显示一条 32 字符英文或 48 字节中文。
+- 2026-05-28 参数探测显示：`scroll=1` 为从右到左，`scroll=0/2` 为从左到右，`testType=0/2` 会进入固定居中显示；`align=0/1/2` 在当前短文本测试中未观察到明显方向差异。
+- 2026-05-28 分段探测显示：超过 51 字节的长中文可被拆成多次 `cmd 29` 写入，但第一段可能未完整显示就被下一段覆盖，整体阅读体验暂不适合作为第一版默认长文本策略。
+- 2026-05-28 歌词层有限探测未证明 `cmd 11` 比 `cmd 29` 更适合远程长文本；第一版 receiver 仍应默认先关闭歌词显示层再写自定义文字。
+- 当前对歌词层/自定义文字层的最佳理解是：二者不是简单“后写覆盖前写”，设备同时存在缓存状态和前台显示状态；歌词显示应按可能占用前台处理，不能只依赖 `cmd 29` 写入顺序。
 - 仅发送 `cmd 29` 会更新自定义文字缓存，但不一定立刻在屏幕前台显示。
 - 实测要稳定前台显示自定义文字，需要先关闭歌词显示层，再切到自定义文字相关屏幕状态，然后发送 `cmd 29`。
 - 当前已存在最小脚本 `k20gt-screen.js`，可通过命令把文本发送到音响屏幕；底层写屏逻辑已抽到 `lib/k20gt-screen-writer.js` 供 CLI 和 receiver 复用。
 - 当前已存在第一版本地 receiver `k20gt-receiver.js`，可主动轮询远程 API、写屏并在写屏成功后 ack。
-- 当前已存在本地有限探测脚本 `k20gt-probe.js`，用于长文本、参数矩阵和分段显示的人工观察记录。
+- 当前已存在本地有限探测脚本 `k20gt-probe.js`，用于长文本、参数矩阵、分段显示和显示恢复序列的人工观察记录。
+- 2026-05-28 `probe-display-restore-mode` 已增加脚本级恢复探测入口：`restore-lyric`、`restore-state`、`release` 和单步 `restore-step`；合测确认 `cmd 11 lyricSwitch=1` 可恢复歌词覆盖，但不会清理远程自定义文本基底。歌词关闭后会露出底下的 `release/REMOTE BASE` 文本；歌词开启后有歌词时会覆盖，歌词间隙会再次露出远程文本。
+- 2026-05-28 合测确认：围绕已知自定义文字前台 payload 的 `cmd 9` 小矩阵候选 `[...,0]`、`[...,1]`、`[...,2]`、`[...,4]` 从 `REMOTE BASE` 出发均未产生可见变化，未能回到时间/个性化预设基底。
+- 2026-05-28 用户手动操作官方 MCHOSE HUB 设置预设/自定义显示文本后，`REMOTE BASE` 被替换掉。这说明官方客户端存在可替换远程自定义文本基底的命令序列；`probe-display-restore-mode` 应继续用安全抓包/线索定位这条序列，而不是直接进入 receiver restore 实现。
+- 2026-05-28 解包官方 renderer 确认 `cmd 9` 屏幕状态 payload 结构为 `[screenSwitch, G, R, B, mode, curTheme, index]`；官方状态解析回 `[screenSwitch, color=[R,G,B], mode, curTheme, index]`。用户截图中的状态 `screenSwitch=1 color=[241,112,142] mode=0 curTheme=0 index=2` 对应候选 payload `[1,112,241,142,0,0,2]`。合测确认 `restore-step official-preset-observed` 可从 `REMOTE BASE` 成功恢复/替换为官方预设基底。
+- 2026-05-28 `add-receiver-display-restore` 已把保守恢复序列接入本地 receiver：当远程目标结束且 `/next` 返回空时，默认先写 `cmd 9` fallback preset payload `[1,112,241,142,0,0,2]`，再写 `cmd 11 lyricSwitch=1` 恢复歌词开关；若 transient 后仍有 sticky，则恢复 sticky 而不是释放基底。该逻辑可通过环境变量关闭或覆盖，不承诺恢复官方自定义文本内容。
+- 2026-05-28 `add-receiver-display-controls` 已实现第一版显示控制语义：新增 receiver-only `POST /api/messages/{id}/dismiss`，sticky dismiss 映射为 `expired`，transient dismiss 映射为 `shown`；receiver 新增本地 DND 和 `receiver-control.json` 一次性控制入口，支持 dismiss、DND on/off；DND 开启时跳过 `/next`、不写屏、不 ack，若当前远程显示活跃则先执行 restore。自动检测 MCHOSE HUB 本地接管暂不实现，后续托盘/检测可复用同一 dismiss helper。
+- 2026-05-28 `add-display-status-and-web-controls` 已实现第一版跨端显示状态：消息公开响应新增 `displayState`、`endedReason`、`endedAt`；API 新增 `GET/POST /api/display/status`；receiver 上报 lastSeen/DND/current display/remote active；web sender 增加状态区，可用 `SEND_TOKEN` 查看 receiver 在线近似状态、DND、当前 sticky 和 transient 队列摘要。第一版 DND 仍以 receiver 本地为权威，web 只读展示，不远程切换。
 
 ## 当前核心文件
 
@@ -46,7 +57,7 @@
 ## 当前迭代进度
 
 - 已完成本地 HID 写屏最小验证，确认 `k20gt-screen.js` 可直接写入 K20 GT 屏幕。
-- 正在执行 OpenSpec change `probe-long-text-display`，当前已完成本地有限探测脚本、观察记录模板和第一轮 `length` 视频观察记录。
+- 正在执行 OpenSpec change `probe-long-text-display`，当前已完成本地有限探测脚本、观察记录模板、长度边界、参数矩阵、分段长文本和歌词层有限探测记录。
 - 已确定第一版产品抽象：底层为屏幕消息投递，产品层先包装为 `sticky`（贴上去）和 `transient`（显示一下）。
 - 已确定第一版远程验证方向：Vercel + 轻量 Redis/KV + 本地 Node receiver 轮询。
 - 由于暂时不方便继续设备验证，OpenSpec change `add-remote-message-api` 已实现并归档第一版云端消息 API：Vercel `api/` 函数结构、Upstash Redis 存储抽象、sticky/transient 状态机、token、TTL、限频、短队列上限、ack 和 clear；本 change 不包含网页发送 UI 或长文本显示实验。
@@ -54,7 +65,14 @@
 - OpenSpec change `prepare-vercel-github-deployment` 已完成并归档第一版提交部署准备：补齐 `.gitignore`、`.env.example`、GitHub + Vercel + Upstash Redis 手动部署文档、线上 API smoke test 和 receiver 联调步骤。
 - 2026-05-27 已完成真实线上闭环验证：GitHub 仓库已连接 Vercel，Upstash Redis 通过 Vercel KV 兼容环境变量工作，线上 API 可创建/拉取/ack/clear 消息，本地 receiver 已连接生产 Vercel API 并把远程 transient 消息显示到真实 `MCHOSE K20 GT` 屏幕。
 - OpenSpec change `add-web-message-sender` 已实现第一版极简网页发送入口：Vercel 根路径提供实际发送工具，用户在浏览器输入 `SEND_TOKEN` 后可发送“贴上去”/“显示一下”并清空当前 sticky；页面不要求也不暴露 `RECEIVER_TOKEN`。2026-05-28 已完成本地网页到真实 K20 GT 屏幕 smoke test：`http://localhost:3000/` -> 本地 Vercel API -> Upstash Redis -> 本地 receiver -> HID 写屏 -> K20 GT，用户手动测试网页确认可用。同日已 push 到 GitHub 并完成 Vercel production 根路径网页手动验证。本 change 不包含登录、多用户、多设备、Telegram/微信、receiver 托盘/自启动/勿扰、长文本策略、声音/TTS 或 Deployment Protection bypass。
-- `probe-long-text-display` 后续继续探测长文本、滚动、歌词层和自定义文字层边界；远程 API 按保守可配置文本限制推进。
+- `probe-long-text-display` 已完成主要设备边界探测，结论是第一版远程 API/receiver 继续按保守可配置文本限制推进，默认使用 `cmd 29` 自定义文字，不默认启用分段长文本或歌词路径。
+- 2026-05-28 用户在官方客户端实测确认：如果正在播放音乐，手动关闭歌词模式后再开启，设备会自动继续展示当前歌词。这说明后续 receiver 恢复歌词时不需要保存歌词文本本身，重点是恢复歌词开关状态。
+- 2026-05-28 用户观察到：歌词模式开启时，如果中间长时间处于无歌词状态（例如一直是“噢噢噢”的人声段），设备会自动回到原来的基底模式。这进一步说明歌词层更像临时覆盖层，恢复歌词开关不等于清理远程自定义文本基底。
+- 新的接收端显示控制主线已确定：远程投递相对 K20 GT 原生显示系统应建模为外部插入/抢占。当前已完成自然结束 restore 以及第一版 dismiss/DND 控制，暂不进入 Telegram/微信、多用户或复杂托盘包装。
+- OpenSpec change `probe-display-restore-mode` 已完成并归档：新增有限恢复探测命令和文档记录框架；合测确认 `cmd 11 lyricSwitch=1` 可恢复歌词覆盖但不清理远程自定义文本基底，并确认官方状态 payload `[1,112,241,142,0,0,2]` 可从 `REMOTE BASE` 恢复/替换为官方预设基底。
+- OpenSpec change `add-receiver-display-restore` 已实现：`lib/k20gt-screen-writer.js` 新增歌词开关、screen state、preset restore 和组合 restore helper；`lib/local-message-receiver.js` 新增本地显示会话状态和 restore-on-empty 规则；默认恢复配置为 `RECEIVER_RESTORE_ON_EMPTY=true`、`RECEIVER_RESTORE_LYRIC=true`、`RECEIVER_RESTORE_SCREEN_STATE=1,112,241,142,0,0,2`。单元测试覆盖 null/active、连续 null、sticky、transient 后 null、transient 后 sticky、写屏失败、restore 失败和配置解析；`npm test` 与 `openspec validate add-receiver-display-restore --strict` 已通过。
+- OpenSpec change `add-receiver-display-controls` 已实现：API/storage 支持 receiver dismiss；receiver 支持 current-message dismiss、DND、本地控制文件和 restore 集成；单元测试覆盖 dismiss sticky/transient、权限边界、DND 不 poll/不写/不 ack、DND active restore、DND off 恢复展示、dismiss/restore 失败不崩溃；`npm test` 与 `openspec validate add-receiver-display-controls --strict` 已通过。
+- OpenSpec change `add-display-status-and-web-controls` 已实现：云端 display status endpoint、receiver status TTL、receiver 状态上报、消息 endedReason/displayState、web 状态区域和相关文档测试；第一版不提供 web 远程切换 DND，不包含 installer/托盘/自启动。
 - 后续仍需观察 receiver 在实际长期设备/网络环境下的稳定性，并决定 Vercel Deployment Protection 是否长期保持关闭或引入自动化 bypass 方案。
 
 建议的后续 change 顺序：
@@ -65,7 +83,11 @@
 4. `prepare-vercel-github-deployment`：准备 GitHub + Vercel + Upstash 手动部署材料和安全忽略规则。（第一版已完成并归档）
 5. 真实线上闭环验证：GitHub -> Vercel API -> Upstash Redis -> local receiver -> K20 GT 屏幕。（已完成，见 `docs/vercel-upstash-smoke-test-report.md`）
 6. `add-web-message-sender`：实现极简网页发送入口，包装“贴上去 / 显示一下”。（第一版已完成）
-7. `package-receiver-experience`：补暂停/勿扰、自启动、托盘、配置文件等体验能力。
+7. `probe-display-restore-mode`：探测脚本级恢复序列，确认关闭/重新开启歌词模式可复现官方客户端行为，并寻找切回个性化预设/时间基底的 `cmd 9` 或相关命令。
+8. `add-receiver-display-restore`：把恢复序列接入 receiver，使 transient 后恢复当前 sticky 或释放远程占用，用户清空/关闭长展示后恢复歌词开关并尽量回到基底模式。（第一版已完成）
+9. `add-receiver-display-controls`：在 API/receiver 层提供明确的远程显示控制，例如关闭当前长展示、receiver-local DND 和恢复策略；不新增复杂账户系统。（第一版已完成）
+10. `add-display-status-and-web-controls`：打通 web/API/receiver 的产品层显示状态、receiver 在线近似状态、DND 展示和消息失效原因。（第一版已完成）
+11. `package-receiver-experience`：在显示占用语义稳定后，再补托盘按钮、自启动、Windows 服务/任务计划和更友好的本地配置体验。
 
 ## 常用命令
 
@@ -141,6 +163,17 @@ MCHOSE K20 GT 屏幕
 
 需要注意：K20 GT 本身已有官方显示模式/显示队列（例如歌词层、自定义文字层等），远程投递层本质上是在占用和调度既有显示能力；实现时应尽量可恢复、可暂停，避免长期抢占不可控。
 
+当前对屏幕显示层的产品模型：
+
+- K20 GT 原生层大致可理解为“基底模式 + 歌词临时覆盖”：基底模式包括个性化预设/时间等和自定义文本；歌词模式开启后，在有歌曲歌词时会临时覆盖基底，歌词结束或无歌词时回到基底。
+- 歌词模式在长时间无歌词段会自动释放回基底模式，因此 receiver 释放远程占用时不能只依赖“重新开启歌词覆盖”，仍需要尽量恢复正确基底。
+- 远程投递无论内部叫 `sticky` 还是 `transient`，相对设备原生显示系统都应视为外部插入/抢占。
+- `sticky` 表示远程系统希望持续占用的目标文字，不等同于设备原生基底模式。
+- `transient` 表示临时插入；显示结束后应优先恢复当前远程 `sticky`，若无 sticky，则释放远程占用并恢复歌词开关/基底模式。
+- 已确认重新开启歌词模式后，正在播放的歌词可由设备/官方链路自动续上；后续重点是复现歌词开关命令和寻找回到个性化预设/时间基底的命令。
+- 当前 receiver 的释放顺序为先恢复配置的 `cmd 9` 基底 payload，再开启歌词开关；这是为了避免只开启歌词时在无歌词间隙露出远程文本。
+- 当前跨端显示状态为产品层摘要，不等同于 K20 GT 原生显示层。公开消息使用 `displayState`/`endedReason` 区分 active/showing/shown/dismissed/expired/replaced/cleared；receiver 上报的 DND 是本地权威状态，web sender 仅展示，不远程修改。
+
 ## 安全和体验约束
 
 - 必须有发送 token 或密码，避免陌生人投递。
@@ -163,10 +196,11 @@ MCHOSE K20 GT 屏幕
 
 ## 当前开放问题
 
-- `cmd 29` 的 `testType`、`align`、`scroll` 参数分别有哪些完整取值和显示效果。
-- 是否可以通过更长停留时间、滚动参数、多次刷新、分段策略、歌词层或其他模式实现超过 32 字的远程长文本体验。
-- 官方歌词显示和自定义文字显示是否互相覆盖，优先级如何。
-- 已知歌词显示层会影响自定义文字的可见性；远程消息场景默认应先关闭歌词层。
+- `cmd 29` 参数已完成第一轮有限映射；仍可后续细测 `align` 在不同长度、不同 `testType` 下是否影响位置。
+- 分段长文本技术上可行但体验不理想；后续若要做长文本，应重新设计停留时间、打断恢复和 UI 文案限制。
+- 官方歌词显示和自定义文字显示的完整优先级仍未完全枚举；第一版远程消息场景默认应先关闭歌词层。
+- 当前已确认歌词恢复开关和一个官方预设基底恢复命令；`add-receiver-display-restore` 第一版已使用 fallback preset payload，后续更理想的是在 receiver 启动或写远程消息前保存/恢复当前 `screenState` 快照。
+- 后续恢复探测仍应使用 `restore-step` 单步执行和记录，避免连续矩阵把歌词时序、基底状态和 recovery 写入混在一起。
 - 图片上传协议能否稳定用于自定义图案或像素动画。
 - receiver 第一版已采用 Node.js 脚本；后续仍需决定正式体验采用 Electron 托盘、Windows 服务、还是其他打包方式。
 - 微信入口是否使用正规公众号/企业微信/网页跳转，还是只作为后期探索。

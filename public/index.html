@@ -69,6 +69,36 @@
         </form>
 
         <p id="status" class="status" role="status" aria-live="polite"></p>
+
+        <section class="display-status" aria-labelledby="display-status-title">
+          <div class="display-status-header">
+            <div>
+              <p class="eyebrow">远程显示状态</p>
+              <h2 id="display-status-title">她那边现在怎样</h2>
+            </div>
+            <button id="refresh-status-button" class="secondary compact" type="button">刷新</button>
+          </div>
+
+          <dl class="status-grid">
+            <div>
+              <dt>receiver</dt>
+              <dd id="receiver-state">未刷新</dd>
+            </div>
+            <div>
+              <dt>勿扰</dt>
+              <dd id="dnd-state">未刷新</dd>
+            </div>
+            <div>
+              <dt>贴上去</dt>
+              <dd id="sticky-state">未刷新</dd>
+            </div>
+            <div>
+              <dt>临时队列</dt>
+              <dd id="transient-state">未刷新</dd>
+            </div>
+          </dl>
+          <p id="status-detail" class="status-detail">勿扰由 receiver 本地控制。</p>
+        </section>
       </section>
     </main>
 

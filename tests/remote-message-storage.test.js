@@ -117,6 +117,7 @@ describe('RemoteMessageStore sticky semantics', () => {
     const second = await store.createMessage({ type: 'sticky', text: 'new note', displaySeconds: 20 });
     const old = await store.getMessage(first.id);
     expect(old.status).toBe('expired');
+    expect(old.endedReason).toBe('replaced');
 
     const nextSecond = await store.nextMessage();
     expect(nextSecond.id).toBe(second.id);
@@ -124,6 +125,7 @@ describe('RemoteMessageStore sticky semantics', () => {
 
     const cleared = await store.clearSticky();
     expect(cleared.id).toBe(second.id);
+    expect(cleared.endedReason).toBe('cleared');
     expect((await store.nextMessage())).toBeNull();
   });
 
@@ -132,7 +134,9 @@ describe('RemoteMessageStore sticky semantics', () => {
     const sticky = await store.createMessage({ type: 'sticky', text: 'short', ttlSeconds: 1, displaySeconds: 20 });
     advance(2);
     expect(await store.nextMessage()).toBeNull();
-    expect((await store.getMessage(sticky.id)).status).toBe('expired');
+    const expired = await store.getMessage(sticky.id);
+    expect(expired.status).toBe('expired');
+    expect(expired.endedReason).toBe('ttl_expired');
   });
 });
 
@@ -154,6 +158,7 @@ describe('RemoteMessageStore transient semantics', () => {
     const acked = await store.ackMessage(first.id);
     expect(acked.acknowledged).toBe(true);
     expect(acked.message.status).toBe('shown');
+    expect(acked.message.endedReason).toBe('shown');
 
     const sticky = await store.nextMessage();
     expect(sticky.type).toBe('sticky');
@@ -184,7 +189,7 @@ describe('RemoteMessageStore transient semantics', () => {
     });
     pendingCase.advance(2);
     expect(await pendingCase.store.nextMessage()).toBeNull();
-    expect((await pendingCase.store.getMessage(pending.id)).status).toBe('expired');
+    expect((await pendingCase.store.getMessage(pending.id)).endedReason).toBe('ttl_expired');
 
     const showingCase = makeStore();
     const showing = await showingCase.store.createMessage({
@@ -196,7 +201,94 @@ describe('RemoteMessageStore transient semantics', () => {
     expect((await showingCase.store.nextMessage()).id).toBe(showing.id);
     showingCase.advance(2);
     expect(await showingCase.store.nextMessage()).toBeNull();
-    expect((await showingCase.store.getMessage(showing.id)).status).toBe('expired');
+    expect((await showingCase.store.getMessage(showing.id)).endedReason).toBe('showing_timeout');
+  });
+});
+
+describe('RemoteMessageStore dismiss semantics', () => {
+  it('dismisses current sticky so next no longer returns it', async () => {
+    const { store } = makeStore();
+    const sticky = await store.createMessage({ type: 'sticky', text: 'sticky', displaySeconds: 20 });
+    expect((await store.nextMessage()).id).toBe(sticky.id);
+
+    const dismissed = await store.dismissMessage(sticky.id);
+    expect(dismissed.dismissed).toBe(true);
+    expect(dismissed.message.status).toBe('expired');
+    expect(dismissed.message.endedReason).toBe('dismissed');
+    expect(await store.nextMessage()).toBeNull();
+  });
+
+  it('dismisses pending and showing transients so they are not returned', async () => {
+    const pendingCase = makeStore();
+    const pending = await pendingCase.store.createMessage({ type: 'transient', text: 'pending', displaySeconds: 20 });
+    const dismissedPending = await pendingCase.store.dismissMessage(pending.id);
+    expect(dismissedPending.dismissed).toBe(true);
+    expect(dismissedPending.message.status).toBe('shown');
+    expect(dismissedPending.message.endedReason).toBe('dismissed');
+    expect(await pendingCase.store.nextMessage()).toBeNull();
+
+    const showingCase = makeStore();
+    const showing = await showingCase.store.createMessage({ type: 'transient', text: 'showing', displaySeconds: 20 });
+    expect((await showingCase.store.nextMessage()).id).toBe(showing.id);
+    const dismissedShowing = await showingCase.store.dismissMessage(showing.id);
+    expect(dismissedShowing.dismissed).toBe(true);
+    expect(dismissedShowing.message.status).toBe('shown');
+    expect(dismissedShowing.message.endedReason).toBe('dismissed');
+    expect(await showingCase.store.nextMessage()).toBeNull();
+  });
+
+  it('safely handles unknown, expired, and shown messages', async () => {
+    const unknownCase = makeStore();
+    expect(await unknownCase.store.dismissMessage('missing')).toEqual({ dismissed: false, message: null });
+
+    const expiredCase = makeStore();
+    const sticky = await expiredCase.store.createMessage({ type: 'sticky', text: 'short', ttlSeconds: 1, displaySeconds: 20 });
+    expiredCase.advance(2);
+    expect(await expiredCase.store.nextMessage()).toBeNull();
+    const dismissedExpired = await expiredCase.store.dismissMessage(sticky.id);
+    expect(dismissedExpired.dismissed).toBe(false);
+    expect(dismissedExpired.message.status).toBe('expired');
+
+    const shownCase = makeStore();
+    const transient = await shownCase.store.createMessage({ type: 'transient', text: 'done', displaySeconds: 20 });
+    expect((await shownCase.store.nextMessage()).id).toBe(transient.id);
+    await shownCase.store.ackMessage(transient.id);
+    const dismissedShown = await shownCase.store.dismissMessage(transient.id);
+    expect(dismissedShown.dismissed).toBe(false);
+    expect(dismissedShown.message.status).toBe('shown');
+  });
+});
+
+describe('RemoteMessageStore display status', () => {
+  it('stores receiver status and returns display summary', async () => {
+    const { store } = makeStore();
+    const sticky = await store.createMessage({ type: 'sticky', text: 'hello', displaySeconds: 20 });
+    await store.nextMessage();
+    await store.updateReceiverStatus({
+      dnd: true,
+      lastStatus: 'displaying',
+      lastDisplayMessageId: sticky.id,
+      lastDisplayMessageType: 'sticky',
+      remoteDisplayActive: true,
+    });
+
+    const status = await store.getDisplayStatus();
+    expect(status.receiver.online).toBe(true);
+    expect(status.receiver.dnd).toBe(true);
+    expect(status.receiver.lastStatus).toBe('displaying');
+    expect(status.currentSticky.id).toBe(sticky.id);
+    expect(status.currentSticky.displayState).toBe('showing');
+    expect(status.currentDisplay.id).toBe(sticky.id);
+    expect(status.pendingTransientCount).toBe(0);
+  });
+
+  it('marks receiver offline-ish when status is stale', async () => {
+    const { store, advance } = makeStore({ config: { receiverStatusTtlSeconds: 5 } });
+    await store.updateReceiverStatus({ lastStatus: 'ok' });
+    advance(6);
+
+    const status = await store.getDisplayStatus();
+    expect(status.receiver.online).toBe(false);
   });
 });
 

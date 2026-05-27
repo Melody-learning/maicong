@@ -1,9 +1,7 @@
 ## Purpose
 
 Provide a token-protected cloud relay API for K20 GT screen messages, including message creation, scheduling, acknowledgement, expiry, rate limiting, and sticky clearing without implementing local receiver or HID display behavior.
-
 ## Requirements
-
 ### Requirement: Token-Protected Remote Message API
 The system SHALL expose remote message API endpoints that require token authentication before reading or mutating message state.
 
@@ -18,6 +16,14 @@ The system SHALL expose remote message API endpoints that require token authenti
 #### Scenario: Receiver token acknowledges a message
 - **WHEN** `POST /api/messages/{id}/ack` is called with a valid `RECEIVER_TOKEN`
 - **THEN** the system applies the acknowledgement rules for the referenced message.
+
+#### Scenario: Receiver token dismisses a message
+- **WHEN** `POST /api/messages/{id}/dismiss` is called with a valid `RECEIVER_TOKEN`
+- **THEN** the system applies the dismiss/read rules for the referenced message.
+
+#### Scenario: Sender token cannot dismiss a message
+- **WHEN** `POST /api/messages/{id}/dismiss` is called with only a valid `SEND_TOKEN`
+- **THEN** the system rejects the request without mutating message state.
 
 #### Scenario: Clear accepts authorized token
 - **WHEN** `POST /api/messages/clear` is called with a valid `SEND_TOKEN` or `RECEIVER_TOKEN`
@@ -55,38 +61,18 @@ The system SHALL maintain at most one current effective sticky message.
 
 #### Scenario: New sticky replaces old sticky
 - **WHEN** a new sticky message is created while another sticky is current
-- **THEN** the system makes the new sticky current and prevents the old sticky from being returned by `next`.
-
-#### Scenario: Sticky can be persistent
-- **WHEN** a sticky is created without `ttlSeconds`
-- **THEN** the system keeps it eligible for `next` until it is replaced, cleared, or otherwise expired by an explicit operation.
-
-#### Scenario: Sticky ack remains active
-- **WHEN** a current sticky message is acknowledged
-- **THEN** the system keeps the sticky as the current effective sticky, keeps it out of status `shown`, and updates display metadata such as `lastDisplayedAt`.
+- **THEN** the system makes the new sticky current, prevents the old sticky from being returned by `next`, and records the old sticky `endedReason` as `replaced`.
 
 #### Scenario: Clear removes current sticky
 - **WHEN** the current sticky is cleared
-- **THEN** subsequent `next` requests do not return that sticky.
+- **THEN** subsequent `next` requests do not return that sticky and the cleared sticky records `endedReason` as `cleared`.
 
 ### Requirement: Transient Queue Semantics
 The system SHALL maintain a bounded FIFO queue of pending transient messages.
 
-#### Scenario: Pending transients are FIFO
-- **WHEN** multiple transient messages are pending
-- **THEN** `next` returns them in ascending creation order before returning any sticky message.
-
-#### Scenario: Queue limit rejects new transient
-- **WHEN** the pending transient queue has reached the configured maximum
-- **THEN** creation of another transient is rejected without adding it to the queue.
-
 #### Scenario: Transient ack becomes shown
 - **WHEN** a showing transient is acknowledged
-- **THEN** the system marks it `shown` and prevents it from being returned by future `next` requests.
-
-#### Scenario: Showing transient is not repeated before ack
-- **WHEN** a transient has already been returned by `next` and is still `showing`
-- **THEN** the system does not return the same transient again before acknowledgement.
+- **THEN** the system marks it `shown`, records `endedReason` as `shown`, and prevents it from being returned by future `next` requests.
 
 ### Requirement: Next Message Scheduling
 The system SHALL schedule messages using transient-first priority, current sticky fallback, and `null` when nothing is eligible.
@@ -116,23 +102,15 @@ The system SHALL enforce TTL and display timing so stale messages are not shown.
 
 #### Scenario: Pending transient expires before display
 - **WHEN** a transient's `expiresAt` is earlier than the current time before it is returned
-- **THEN** the system marks it `expired` and does not return it from `next`.
+- **THEN** the system marks it `expired`, records `endedReason` as `ttl_expired`, and does not return it from `next`.
 
 #### Scenario: Showing transient expires after timeout
-- **WHEN** a showing transient is not acknowledged before its showing timeout or expiration time
-- **THEN** the system marks it `expired` and does not return it from `next`.
+- **WHEN** a showing transient is not acknowledged before its showing timeout
+- **THEN** the system marks it `expired`, records `endedReason` as `showing_timeout`, and does not return it from `next`.
 
 #### Scenario: Sticky with TTL expires
 - **WHEN** a sticky has an `expiresAt` earlier than the current time
-- **THEN** the system marks it `expired`, removes it as the current sticky, and does not return it from `next`.
-
-#### Scenario: Default transient timing is applied
-- **WHEN** a transient is created without explicit `displaySeconds`
-- **THEN** the system uses a default display duration of 20 seconds.
-
-#### Scenario: Default transient TTL is applied
-- **WHEN** a transient is created without explicit `ttlSeconds`
-- **THEN** the system uses a default TTL of 300 seconds.
+- **THEN** the system marks it `expired`, records `endedReason` as `ttl_expired`, removes it as the current sticky, and does not return it from `next`.
 
 ### Requirement: Rate Limiting and Abuse Guardrails
 The system SHALL apply simple configurable guardrails to reduce spam and accidental overload.
@@ -163,3 +141,41 @@ The change SHALL implement only the cloud message API and SHALL NOT implement lo
 #### Scenario: Display experiments are out of scope
 - **WHEN** this change is completed
 - **THEN** it does not resolve long-text display, scrolling, lyric layer, custom text layer, or image upload protocol behavior.
+
+### Requirement: Message Dismiss Semantics
+The system SHALL allow the receiver to dismiss/read a message so it is no longer scheduled for display.
+
+#### Scenario: Current sticky is dismissed
+- **WHEN** `POST /api/messages/{id}/dismiss` is called for the current sticky
+- **THEN** the system marks that sticky expired, removes it as current sticky, and later `next` requests do not return it.
+
+#### Scenario: Pending transient is dismissed
+- **WHEN** `POST /api/messages/{id}/dismiss` is called for a pending transient
+- **THEN** the system marks that transient shown or otherwise terminal and later `next` requests do not return it.
+
+#### Scenario: Showing transient is dismissed
+- **WHEN** `POST /api/messages/{id}/dismiss` is called for a showing transient
+- **THEN** the system marks that transient shown or otherwise terminal and later `next` requests do not return it.
+
+#### Scenario: Unknown message is dismissed
+- **WHEN** `POST /api/messages/{id}/dismiss` is called for an unknown message id
+- **THEN** the system returns a safe success response and does not mutate unrelated state.
+
+#### Scenario: Terminal message is dismissed
+- **WHEN** `POST /api/messages/{id}/dismiss` is called for an already expired or shown message
+- **THEN** the system returns safely without reactivating or corrupting the message.
+
+### Requirement: Public Display Status Summary
+The system SHALL provide a sender-readable product-level display status summary without exposing receiver secrets.
+
+#### Scenario: Display status includes receiver summary
+- **WHEN** `GET /api/display/status` succeeds
+- **THEN** the response includes receiver DND, `lastSeenAt`, online-ish status, last status text, last display message id/type, and remote display active flag.
+
+#### Scenario: Display status includes message summaries
+- **WHEN** `GET /api/display/status` succeeds
+- **THEN** the response includes current sticky summary, pending transient count, and current remote display message summary when known.
+
+#### Scenario: Public messages include display fields
+- **WHEN** any API returns a public message
+- **THEN** the message includes `displayState`, `endedReason`, and `endedAt` fields while preserving existing message fields.

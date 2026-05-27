@@ -1,0 +1,8 @@
+- [x] 1. Add OpenSpec deltas for remote API dismiss and receiver display controls.
+- [x] 2. Implement server-side dismiss storage/API/route with receiver-token authorization.
+- [x] 3. Extend receiver config/session/API helpers for current-message dismiss and DND state.
+- [x] 4. Implement JSON control-file handling in the receiver loop and CLI entry point.
+- [x] 5. Add API/storage tests for dismiss behavior and token boundaries.
+- [x] 6. Add receiver tests for dismiss, DND, restore, and failure resilience.
+- [x] 7. Update docs, `.env.example`, and `AGENTS.md` with the final controls model.
+- [x] 8. Run `npm test` and `openspec validate add-receiver-display-controls --strict`.

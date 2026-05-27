@@ -1,4 +1,4 @@
-const { setScreenText } = require("./lib/k20gt-screen-writer");
+const { restoreDisplay, setScreenText } = require("./lib/k20gt-screen-writer");
 const { getReceiverConfig, startReceiverLoop } = require("./lib/local-message-receiver");
 
 async function main() {
@@ -6,6 +6,7 @@ async function main() {
   const loop = startReceiverLoop({
     config,
     writeScreenText: (text) => setScreenText(text),
+    restoreDisplay,
   });
 
   const stop = async (signal) => {

@@ -45,4 +45,11 @@ describe('token authorization', () => {
     expect(authorize(sendReq, config, [config.sendToken, config.receiverToken])).toBe(true);
     expect(authorize(receiverReq, config, [config.sendToken, config.receiverToken])).toBe(true);
   });
+
+  it('allows dismiss-style endpoints to accept only the receiver token', () => {
+    const sendReq = { headers: { authorization: 'Bearer send-secret' } };
+    const receiverReq = { headers: { authorization: 'Bearer receiver-secret' } };
+    expect(authorize(sendReq, config, [config.receiverToken])).toBe(false);
+    expect(authorize(receiverReq, config, [config.receiverToken])).toBe(true);
+  });
 });
