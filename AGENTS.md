@@ -37,6 +37,7 @@
 - `package.json` / `package-lock.json`：Node.js 依赖和脚本入口，目前主要依赖 `node-hid`。
 - `.env.example`：云端 API 和本地 receiver 的环境变量占位示例，不包含真实 token。
 - `docs/vercel-deployment.md`：GitHub + Vercel + Upstash Redis 手动部署和 smoke test 指南。
+- `docs/vercel-upstash-smoke-test-report.md`：Vercel + Upstash + 本地 receiver + 真实 K20 GT 屏幕的线上闭环验证记录。
 - `openspec/`：后续需求稳定后，用于记录正式变更、设计和规格。
 
 ## 当前迭代进度
@@ -47,17 +48,18 @@
 - 已确定第一版远程验证方向：Vercel + 轻量 Redis/KV + 本地 Node receiver 轮询。
 - 由于暂时不方便继续设备验证，OpenSpec change `add-remote-message-api` 已实现并归档第一版云端消息 API：Vercel `api/` 函数结构、Upstash Redis 存储抽象、sticky/transient 状态机、token、TTL、限频、短队列上限、ack 和 clear；本 change 不包含网页发送 UI 或长文本显示实验。
 - OpenSpec change `add-local-message-receiver` 已实现第一版本地 Node.js receiver：从环境变量读取远程 API 地址和 receiver token，按间隔轮询 `next`，有消息时复用 HID 写屏模块，写屏成功后 ack；API/JSON/ack/写屏失败不会让循环崩溃，Ctrl+C 可退出。本 change 不包含托盘、暂停/勿扰、自启动、Windows 服务或发送 UI。
-- OpenSpec change `prepare-vercel-github-deployment` 已完成第一版提交部署准备：补齐 `.gitignore`、`.env.example`、GitHub + Vercel + Upstash Redis 手动部署文档、线上 API smoke test 和 receiver 联调步骤；本 change 不直接 push、不创建远程仓库、不操作 GitHub/Vercel 账户。
+- OpenSpec change `prepare-vercel-github-deployment` 已完成并归档第一版提交部署准备：补齐 `.gitignore`、`.env.example`、GitHub + Vercel + Upstash Redis 手动部署文档、线上 API smoke test 和 receiver 联调步骤。
+- 2026-05-27 已完成真实线上闭环验证：GitHub 仓库已连接 Vercel，Upstash Redis 通过 Vercel KV 兼容环境变量工作，线上 API 可创建/拉取/ack/clear 消息，本地 receiver 已连接生产 Vercel API 并把远程 transient 消息显示到真实 `MCHOSE K20 GT` 屏幕。
 - `probe-long-text-display` 后续继续探测长文本、滚动、歌词层和自定义文字层边界；远程 API 按保守可配置文本限制推进。
-- 真实 GitHub push、Vercel 部署、Upstash 配置和现场网络稳定性验证仍是后续手动/现场工作。
+- 后续仍需观察 receiver 在实际长期设备/网络环境下的稳定性，并决定 Vercel Deployment Protection 是否长期保持关闭或引入自动化 bypass 方案。
 
 建议的后续 change 顺序：
 
 1. `probe-long-text-display`：探测超过 32 字、滚动、歌词层和自定义文字层能力边界。
 2. `add-remote-message-api`：实现 Vercel API、轻量 Redis/KV 消息存储、状态机、调度和 token。（第一版已完成并归档）
-3. `add-local-message-receiver`：实现本地 receiver 轮询、写屏、ack 和失败处理。（第一版已完成，待归档）
-4. `prepare-vercel-github-deployment`：准备 GitHub + Vercel + Upstash 手动部署材料和安全忽略规则。（第一版已完成，待归档）
-5. 真实现场验证：手动 push 到 GitHub、连接 Vercel、配置 Upstash，观察 receiver 在实际网络下的稳定性。
+3. `add-local-message-receiver`：实现本地 receiver 轮询、写屏、ack 和失败处理。（第一版已完成并归档）
+4. `prepare-vercel-github-deployment`：准备 GitHub + Vercel + Upstash 手动部署材料和安全忽略规则。（第一版已完成并归档）
+5. 真实线上闭环验证：GitHub -> Vercel API -> Upstash Redis -> local receiver -> K20 GT 屏幕。（已完成，见 `docs/vercel-upstash-smoke-test-report.md`）
 6. `add-web-message-sender`：实现极简网页发送入口，包装“贴上去 / 显示一下”。
 7. `package-receiver-experience`：补暂停/勿扰、自启动、托盘、配置文件等体验能力。
 
@@ -99,6 +101,8 @@ MCHOSE K20 GT 屏幕
 - 接收端最终应做成托盘小程序；当前第一版已可用 Node.js 脚本验证。
 - 第一版验证阶段可使用 Vercel 部署网页和 API，先解决远程投递闭环；Vercel 不作为国内长期稳定可用的最终承诺，后续可迁移到国内云、香港或新加坡节点。
 - 第一版验证阶段的云端存储推荐使用 Vercel 当前支持的轻量 Redis/KV 方案（如 Vercel Marketplace 的 Upstash Redis），用于消息短队列、TTL、状态和限频。
+- 2026-05-27 真实验证中，Upstash Redis 通过 Vercel Storage 自动注入的 `KV_REST_API_URL` / `KV_REST_API_TOKEN` 可被当前 API 直接使用，无需额外重复配置 `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`。
+- 2026-05-27 真实验证中，Vercel Deployment Protection 的登录保护会拦截 API 客户端；第一版已通过关闭 Vercel Authentication 解决，安全边界依赖 API 自身 bearer token。
 - 第一版鉴权可先使用调试 token，不做注册登录；发送端 token 和 receiver token 推荐分开，避免发送 token 泄露后可伪造接收端确认。
 
 ## 消息投递产品模型
@@ -160,7 +164,7 @@ MCHOSE K20 GT 屏幕
 - 图片上传协议能否稳定用于自定义图案或像素动画。
 - receiver 第一版已采用 Node.js 脚本；后续仍需决定正式体验采用 Electron 托盘、Windows 服务、还是其他打包方式。
 - 微信入口是否使用正规公众号/企业微信/网页跳转，还是只作为后期探索。
-- Vercel + Upstash Redis 在国内网络下对 receiver 轮询是否足够稳定；若不稳定，需迁移到国内云、香港或新加坡节点。
+- Vercel + Upstash Redis 已完成首次线上到设备闭环验证；仍需观察长期运行和她实际网络环境下的稳定性，若不稳定，需迁移到国内云、香港或新加坡节点。
 
 ## 工作方式
 
