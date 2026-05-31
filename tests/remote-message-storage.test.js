@@ -8,8 +8,6 @@ const { DEFAULTS } = configModule;
 class MemoryRedis {
   constructor() {
     this.values = new Map();
-    this.zsets = new Map();
-    this.sets = new Map();
   }
 
   async get(key) {
@@ -22,8 +20,6 @@ class MemoryRedis {
 
   async del(key) {
     this.values.delete(key);
-    this.zsets.delete(key);
-    this.sets.delete(key);
   }
 
   async incr(key) {
@@ -35,39 +31,37 @@ class MemoryRedis {
   async expire() {}
 
   async zadd(key, entry) {
-    if (!this.zsets.has(key)) this.zsets.set(key, new Map());
-    this.zsets.get(key).set(entry.member, entry.score);
+    const set = this.values.get(key) || [];
+    const filtered = set.filter((item) => item.member !== entry.member);
+    filtered.push({ score: entry.score, member: entry.member });
+    this.values.set(key, filtered);
+    return 1;
   }
 
-  async zrange(key, start, stop) {
-    const entries = Array.from((this.zsets.get(key) || new Map()).entries())
-      .sort((a, b) => a[1] - b[1])
-      .map(([member]) => member);
-    const end = stop < 0 ? entries.length : stop + 1;
-    return entries.slice(start, end);
+  async zrange(key, start, stop, options = {}) {
+    const set = [...(this.values.get(key) || [])].sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      return String(a.member).localeCompare(String(b.member));
+    });
+    if (options.rev) set.reverse();
+    const normalizedStop = stop < 0 ? set.length + stop : stop;
+    return set.slice(start, normalizedStop + 1).map((item) => item.member);
   }
 
-  async zrem(key, member) {
-    const zset = this.zsets.get(key);
-    if (zset) zset.delete(member);
-  }
-
-  async zcard(key) {
-    return (this.zsets.get(key) || new Map()).size;
-  }
-
-  async sadd(key, member) {
-    if (!this.sets.has(key)) this.sets.set(key, new Set());
-    this.sets.get(key).add(member);
-  }
-
-  async srem(key, member) {
-    const set = this.sets.get(key);
-    if (set) set.delete(member);
-  }
-
-  async smembers(key) {
-    return Array.from(this.sets.get(key) || []);
+  async zremrangebyrank(key, start, stop) {
+    const set = [...(this.values.get(key) || [])].sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      return String(a.member).localeCompare(String(b.member));
+    });
+    const normalizedStop = stop < 0 ? set.length + stop : stop;
+    if (normalizedStop < start) return 0;
+    const removed = set.slice(start, normalizedStop + 1);
+    const removedMembers = new Set(removed.map((item) => item.member));
+    this.values.set(
+      key,
+      set.filter((item) => !removedMembers.has(item.member))
+    );
+    return removed.length;
   }
 }
 
@@ -88,7 +82,7 @@ function makeStore(overrides = {}) {
     redis,
     config,
     now: () => now,
-    idFactory: () => `msg_${nextId++}`,
+    idFactory: () => `board_${nextId++}`,
   });
   return {
     store,
@@ -100,175 +94,144 @@ function makeStore(overrides = {}) {
   };
 }
 
-describe('RemoteMessageStore sticky semantics', () => {
-  it('creates, replaces, clears, and keeps acked sticky active', async () => {
+describe('RemoteMessageStore board semantics', () => {
+  it('creates, replaces, reads, and clears a single current board', async () => {
     const { store } = makeStore();
-    const first = await store.createMessage({ type: 'sticky', text: 'hello', displaySeconds: 20 });
-    expect(first.status).toBe('pending');
+    const first = await store.createBoard({ text: 'hello', durationSeconds: 30 });
 
-    const nextFirst = await store.nextMessage();
-    expect(nextFirst.id).toBe(first.id);
-    expect(nextFirst.status).toBe('showing');
+    expect(first.id).toBe('board_1');
+    expect(first.durationSeconds).toBe(30);
+    expect(first.expiresAt).toBe('2026-05-27T10:00:30.000Z');
+    expect((await store.currentBoard()).id).toBe(first.id);
 
-    const acked = await store.ackMessage(first.id);
-    expect(acked.acknowledged).toBe(true);
-    expect(acked.message.status).toBe('showing');
-
-    const second = await store.createMessage({ type: 'sticky', text: 'new note', displaySeconds: 20 });
-    const old = await store.getMessage(first.id);
-    expect(old.status).toBe('expired');
+    const second = await store.createBoard({ text: 'new note', durationSeconds: 60 });
+    const old = await store.getBoard(first.id);
     expect(old.endedReason).toBe('replaced');
+    expect((await store.currentBoard()).id).toBe(second.id);
 
-    const nextSecond = await store.nextMessage();
-    expect(nextSecond.id).toBe(second.id);
-    expect(nextSecond.text).toBe('new note');
-
-    const cleared = await store.clearSticky();
+    const cleared = await store.clearBoard();
     expect(cleared.id).toBe(second.id);
     expect(cleared.endedReason).toBe('cleared');
-    expect((await store.nextMessage())).toBeNull();
+    expect(await store.currentBoard()).toBeNull();
   });
 
-  it('expires a sticky with ttl before scheduling it', async () => {
+  it('expires current boards and clears the pointer on read', async () => {
     const { store, advance } = makeStore();
-    const sticky = await store.createMessage({ type: 'sticky', text: 'short', ttlSeconds: 1, displaySeconds: 20 });
+    const board = await store.createBoard({ text: 'short', durationSeconds: 1 });
+
     advance(2);
-    expect(await store.nextMessage()).toBeNull();
-    const expired = await store.getMessage(sticky.id);
-    expect(expired.status).toBe('expired');
-    expect(expired.endedReason).toBe('ttl_expired');
-  });
-});
 
-describe('RemoteMessageStore transient semantics', () => {
-  it('schedules pending transients FIFO before sticky and marks acked transient shown', async () => {
+    expect(await store.currentBoard()).toBeNull();
+    const expired = await store.getBoard(board.id);
+    expect(expired.endedReason).toBe('expired');
+    expect(expired.endedAt).toBe('2026-05-27T10:00:02.000Z');
+  });
+
+  it('marks an expired previous board as expired before creating a replacement', async () => {
     const { store, advance } = makeStore();
-    await store.createMessage({ type: 'sticky', text: 'sticky', displaySeconds: 20 });
-    const first = await store.createMessage({ type: 'transient', text: 'one', displaySeconds: 20 });
+    const old = await store.createBoard({ text: 'short', durationSeconds: 1 });
+
+    advance(2);
+    const next = await store.createBoard({ text: 'new', durationSeconds: 30 });
+
+    const expired = await store.getBoard(old.id);
+    expect(expired.endedReason).toBe('expired');
+    expect((await store.currentBoard()).id).toBe(next.id);
+  });
+
+  it('records displayed timing without ending the board', async () => {
+    const { store, advance } = makeStore();
+    const board = await store.createBoard({ text: 'hello', durationSeconds: 30 });
+
     advance(1);
-    const second = await store.createMessage({ type: 'transient', text: 'two', displaySeconds: 20 });
+    const first = await store.reportBoardDisplayed(board.id);
+    expect(first.displayed).toBe(true);
+    expect(first.board.displayedAt).toBe('2026-05-27T10:00:01.000Z');
+    expect(first.board.lastDisplayedAt).toBe('2026-05-27T10:00:01.000Z');
+    expect(first.board.endedAt).toBeNull();
 
-    const nextOne = await store.nextMessage();
-    expect(nextOne.id).toBe(first.id);
-    expect(nextOne.status).toBe('showing');
-
-    const nextTwo = await store.nextMessage();
-    expect(nextTwo.id).toBe(second.id);
-
-    const acked = await store.ackMessage(first.id);
-    expect(acked.acknowledged).toBe(true);
-    expect(acked.message.status).toBe('shown');
-    expect(acked.message.endedReason).toBe('shown');
-
-    const sticky = await store.nextMessage();
-    expect(sticky.type).toBe('sticky');
+    advance(1);
+    const second = await store.reportBoardDisplayed(board.id);
+    expect(second.displayed).toBe(true);
+    expect(second.board.displayedAt).toBe('2026-05-27T10:00:01.000Z');
+    expect(second.board.lastDisplayedAt).toBe('2026-05-27T10:00:02.000Z');
+    expect((await store.currentBoard()).id).toBe(board.id);
   });
 
-  it('does not repeat a showing transient before ack', async () => {
-    const { store } = makeStore();
-    const message = await store.createMessage({ type: 'transient', text: 'once', displaySeconds: 20 });
-    expect((await store.nextMessage()).id).toBe(message.id);
-    expect(await store.nextMessage()).toBeNull();
-  });
-
-  it('rejects transient creation when the pending queue limit is reached', async () => {
-    const { store } = makeStore({ config: { transientQueueLimit: 1 } });
-    await store.createMessage({ type: 'transient', text: 'one', displaySeconds: 20 });
-    await expect(store.createMessage({ type: 'transient', text: 'two', displaySeconds: 20 })).rejects.toMatchObject({
-      code: 'QUEUE_FULL',
-    });
-  });
-
-  it('expires pending and showing transients', async () => {
-    const pendingCase = makeStore();
-    const pending = await pendingCase.store.createMessage({
-      type: 'transient',
-      text: 'pending',
-      ttlSeconds: 1,
-      displaySeconds: 20,
-    });
-    pendingCase.advance(2);
-    expect(await pendingCase.store.nextMessage()).toBeNull();
-    expect((await pendingCase.store.getMessage(pending.id)).endedReason).toBe('ttl_expired');
-
-    const showingCase = makeStore();
-    const showing = await showingCase.store.createMessage({
-      type: 'transient',
-      text: 'showing',
-      ttlSeconds: 100,
-      displaySeconds: 1,
-    });
-    expect((await showingCase.store.nextMessage()).id).toBe(showing.id);
-    showingCase.advance(2);
-    expect(await showingCase.store.nextMessage()).toBeNull();
-    expect((await showingCase.store.getMessage(showing.id)).endedReason).toBe('showing_timeout');
-  });
-});
-
-describe('RemoteMessageStore dismiss semantics', () => {
-  it('dismisses current sticky so next no longer returns it', async () => {
-    const { store } = makeStore();
-    const sticky = await store.createMessage({ type: 'sticky', text: 'sticky', displaySeconds: 20 });
-    expect((await store.nextMessage()).id).toBe(sticky.id);
-
-    const dismissed = await store.dismissMessage(sticky.id);
-    expect(dismissed.dismissed).toBe(true);
-    expect(dismissed.message.status).toBe('expired');
-    expect(dismissed.message.endedReason).toBe('dismissed');
-    expect(await store.nextMessage()).toBeNull();
-  });
-
-  it('dismisses pending and showing transients so they are not returned', async () => {
-    const pendingCase = makeStore();
-    const pending = await pendingCase.store.createMessage({ type: 'transient', text: 'pending', displaySeconds: 20 });
-    const dismissedPending = await pendingCase.store.dismissMessage(pending.id);
-    expect(dismissedPending.dismissed).toBe(true);
-    expect(dismissedPending.message.status).toBe('shown');
-    expect(dismissedPending.message.endedReason).toBe('dismissed');
-    expect(await pendingCase.store.nextMessage()).toBeNull();
-
-    const showingCase = makeStore();
-    const showing = await showingCase.store.createMessage({ type: 'transient', text: 'showing', displaySeconds: 20 });
-    expect((await showingCase.store.nextMessage()).id).toBe(showing.id);
-    const dismissedShowing = await showingCase.store.dismissMessage(showing.id);
-    expect(dismissedShowing.dismissed).toBe(true);
-    expect(dismissedShowing.message.status).toBe('shown');
-    expect(dismissedShowing.message.endedReason).toBe('dismissed');
-    expect(await showingCase.store.nextMessage()).toBeNull();
-  });
-
-  it('safely handles unknown, expired, and shown messages', async () => {
-    const unknownCase = makeStore();
-    expect(await unknownCase.store.dismissMessage('missing')).toEqual({ dismissed: false, message: null });
+  it('safely ignores displayed reports for missing, expired, or non-current boards', async () => {
+    const missingCase = makeStore();
+    expect(await missingCase.store.reportBoardDisplayed('missing')).toEqual({ displayed: false, board: null });
 
     const expiredCase = makeStore();
-    const sticky = await expiredCase.store.createMessage({ type: 'sticky', text: 'short', ttlSeconds: 1, displaySeconds: 20 });
+    const expired = await expiredCase.store.createBoard({ text: 'short', durationSeconds: 1 });
     expiredCase.advance(2);
-    expect(await expiredCase.store.nextMessage()).toBeNull();
-    const dismissedExpired = await expiredCase.store.dismissMessage(sticky.id);
-    expect(dismissedExpired.dismissed).toBe(false);
-    expect(dismissedExpired.message.status).toBe('expired');
+    expect(await expiredCase.store.reportBoardDisplayed(expired.id)).toEqual({ displayed: false, board: null });
 
-    const shownCase = makeStore();
-    const transient = await shownCase.store.createMessage({ type: 'transient', text: 'done', displaySeconds: 20 });
-    expect((await shownCase.store.nextMessage()).id).toBe(transient.id);
-    await shownCase.store.ackMessage(transient.id);
-    const dismissedShown = await shownCase.store.dismissMessage(transient.id);
-    expect(dismissedShown.dismissed).toBe(false);
-    expect(dismissedShown.message.status).toBe('shown');
+    const replacedCase = makeStore();
+    const old = await replacedCase.store.createBoard({ text: 'old', durationSeconds: 30 });
+    await replacedCase.store.createBoard({ text: 'new', durationSeconds: 30 });
+    expect(await replacedCase.store.reportBoardDisplayed(old.id)).toEqual({ displayed: false, board: null });
+  });
+
+  it('dismisses only the current board', async () => {
+    const { store } = makeStore();
+    expect(await store.dismissBoard('missing')).toEqual({ dismissed: false, board: null });
+
+    const first = await store.createBoard({ text: 'old', durationSeconds: 30 });
+    const second = await store.createBoard({ text: 'new', durationSeconds: 30 });
+
+    const oldDismiss = await store.dismissBoard(first.id);
+    expect(oldDismiss.dismissed).toBe(false);
+    expect(oldDismiss.board.endedReason).toBe('replaced');
+
+    const dismissed = await store.dismissBoard(second.id);
+    expect(dismissed.dismissed).toBe(true);
+    expect(dismissed.board.endedReason).toBe('dismissed');
+    expect(await store.currentBoard()).toBeNull();
+  });
+
+  it('keeps a bounded newest-first board history with current markers and missing records skipped', async () => {
+    const { store, redis, config, advance } = makeStore({ config: { boardHistoryLimit: 3 } });
+
+    const first = await store.createBoard({ text: 'one', durationSeconds: 30 });
+    advance(1);
+    const second = await store.createBoard({ text: 'two', durationSeconds: 30 });
+    advance(1);
+    const third = await store.createBoard({ text: 'three', durationSeconds: 30 });
+    advance(1);
+    const fourth = await store.createBoard({ text: 'four', durationSeconds: 30 });
+
+    let history = await store.listBoardHistory();
+    expect(history.map((item) => item.id)).toEqual([fourth.id, third.id, second.id]);
+    expect(history[0]).toEqual({
+      id: fourth.id,
+      text: 'four',
+      createdAt: '2026-05-27T10:00:03.000Z',
+      isCurrent: true,
+    });
+    expect(history[1].isCurrent).toBeUndefined();
+    expect(history.some((item) => item.id === first.id)).toBe(false);
+
+    await redis.del(store.boardKey(third.id));
+    history = await store.listBoardHistory();
+    expect(history.map((item) => item.id)).toEqual([fourth.id, second.id]);
+
+    await store.clearBoard();
+    history = await store.listBoardHistory();
+    expect(history.find((item) => item.id === fourth.id).isCurrent).toBeUndefined();
+    expect(redis.values.get(`${config.keyPrefix}:boardHistory`).map((item) => item.member)).toHaveLength(3);
   });
 });
 
 describe('RemoteMessageStore display status', () => {
-  it('stores receiver status and returns display summary', async () => {
+  it('stores receiver status and returns board summaries', async () => {
     const { store } = makeStore();
-    const sticky = await store.createMessage({ type: 'sticky', text: 'hello', displaySeconds: 20 });
-    await store.nextMessage();
+    const board = await store.createBoard({ text: 'hello', durationSeconds: 30 });
+    await store.reportBoardDisplayed(board.id);
     await store.updateReceiverStatus({
       dnd: true,
       lastStatus: 'displaying',
-      lastDisplayMessageId: sticky.id,
-      lastDisplayMessageType: 'sticky',
+      lastDisplayBoardId: board.id,
       remoteDisplayActive: true,
     });
 
@@ -276,10 +239,11 @@ describe('RemoteMessageStore display status', () => {
     expect(status.receiver.online).toBe(true);
     expect(status.receiver.dnd).toBe(true);
     expect(status.receiver.lastStatus).toBe('displaying');
-    expect(status.currentSticky.id).toBe(sticky.id);
-    expect(status.currentSticky.displayState).toBe('showing');
-    expect(status.currentDisplay.id).toBe(sticky.id);
-    expect(status.pendingTransientCount).toBe(0);
+    expect(status.receiver.lastDisplayBoardId).toBe(board.id);
+    expect(status.currentBoard.id).toBe(board.id);
+    expect(status.currentDisplay.id).toBe(board.id);
+    expect(status.pendingTransientCount).toBeUndefined();
+    expect(status.currentSticky).toBeUndefined();
   });
 
   it('marks receiver offline-ish when status is stale', async () => {

@@ -1,101 +1,120 @@
 # Local Message Receiver
 
-This receiver is the first local bridge from the remote message API to the connected `MCHOSE K20 GT` screen.
+The local receiver is the Windows-side adapter between the cloud board API and the MCHOSE K20 GT HID screen writer.
 
-It polls the cloud API, writes returned message text with the known local HID screen writer, and calls ack only after the local write succeeds. When a previously active remote display target ends and the API returns `message: null`, the receiver can now release the remote custom-text occupation and restore a configured baseline/lyric switch.
+It polls `GET /api/board`, writes a new board id to the screen, reports `POST /api/board/{id}/displayed` only after a successful screen write, and restores the configured baseline when the current board becomes empty or expired.
 
-## Requirements
+## Configuration
 
-- Node.js 18 or newer, because the receiver uses native `fetch`.
-- A connected `MCHOSE K20 GT` screen endpoint that works with `npm run screen`.
-- A deployed or local remote message API from `add-remote-message-api`.
-
-## Environment Variables
-
-Required:
-
-- `REMOTE_MESSAGE_API_BASE_URL`: API origin, for example `https://your-app.vercel.app` or `http://localhost:3000`.
-- `RECEIVER_TOKEN`: bearer token accepted by `GET /api/messages/next`, `POST /api/messages/{id}/ack`, and `POST /api/messages/{id}/dismiss`.
-
-Optional:
-
-- `RECEIVER_POLL_INTERVAL_MS`: poll interval in milliseconds, default `3000`.
-- `RECEIVER_LOG_LEVEL`: `info` by default; use `debug` to log empty polls.
-- `RECEIVER_RESTORE_ON_EMPTY`: restore display when `/next` returns no message after remote display was active, default `true`.
-- `RECEIVER_RESTORE_LYRIC`: re-enable lyric display during restore, default `true`.
-- `RECEIVER_RESTORE_SCREEN_STATE`: comma-separated `cmd 9` payload used as the fallback baseline, default `1,112,241,142,0,0,2`. Set to an empty value to skip the `cmd 9` restore.
-- `RECEIVER_TRANSIENT_RESTORE_DELAY_MS`: optional local delay before restore on empty, default `0`. The receiver still relies on server scheduling for normal `displaySeconds` behavior.
-- `RECEIVER_DND`: start with Do Not Disturb enabled, default `false`.
-- `RECEIVER_CONTROL_FILE`: local one-shot JSON control file path, default `receiver-control.json`.
-- `RECEIVER_STATUS_TTL_SECONDS`: cloud receiver-status TTL, default `30`.
-- `RECEIVER_STATUS_UPDATE_INTERVAL_MS`: reserved optional status throttling value, default `0`; current receiver may report every loop.
-
-## Run
-
-```powershell
-$env:REMOTE_MESSAGE_API_BASE_URL = "http://localhost:3000"
-$env:RECEIVER_TOKEN = "receiver-secret"
-npm run receiver
-```
-
-Stop it with Ctrl+C. The receiver stops scheduling new polls and exits cleanly.
-
-## Local Controls
-
-The first control surface is a local JSON file. The receiver checks it once per poll tick before requesting `/api/messages/next`. After a valid command succeeds, the receiver deletes the file so the command is not repeated.
-
-Dismiss/read the current remote message:
-
-```powershell
-Set-Content -Path receiver-control.json -Encoding utf8 -Value '{"command":"dismiss"}'
-```
-
-Enable Do Not Disturb:
-
-```powershell
-Set-Content -Path receiver-control.json -Encoding utf8 -Value '{"command":"dnd","enabled":true}'
-```
-
-Disable Do Not Disturb:
-
-```powershell
-Set-Content -Path receiver-control.json -Encoding utf8 -Value '{"command":"dnd","enabled":false}'
-```
-
-Short form is also accepted:
+Daily use should prefer `receiver.config.json`:
 
 ```json
-{ "dnd": true }
+{
+  "apiBaseUrl": "https://your-vercel-project.vercel.app",
+  "receiverToken": "replace-with-random-receiver-token",
+  "sendToken": "replace-with-random-sender-token",
+  "pollIntervalMs": 3000,
+  "textLimit": 32,
+  "restoreOnEmpty": true,
+  "restoreLyric": true,
+  "restoreScreenState": [1, 112, 241, 142, 0, 0, 2],
+  "transientRestoreDelayMs": 0,
+  "dnd": false,
+  "controlFile": "receiver-control.json",
+  "logLevel": "info"
+}
 ```
 
-## Behavior
+`transientRestoreDelayMs` is kept as a local restore-delay setting for runtime compatibility, even though the cloud API no longer has transient messages.
 
-- `sticky` and `transient` scheduling stays on the server. The receiver writes whatever `/api/messages/next` returns.
-- A `sticky` remains a remote display target until it is replaced, cleared, dismissed/read, or expired. Dismissing current sticky calls the server dismiss endpoint, then restores the configured baseline/lyric switch.
-- After a `transient` is acked, the next server result decides what happens: if `/next` returns sticky, the receiver writes that sticky; if `/next` returns `null`, it restores the configured baseline/lyric switch.
-- When sticky is cleared, `/next` returns `null`; if the receiver had remote display active, it restores once and does not repeat restore on every empty poll.
-- DND is receiver-local and authoritative. The receiver reports it to cloud display status for the web page, but the web page does not remotely toggle it. While DND is on, the receiver skips `/next`, does not write the screen, and does not ack undisplayed messages. Transients rely on TTL to expire; sticky stays current server-side unless dismissed or cleared.
-- Enabling DND while a remote message is active attempts restore immediately so the remote text does not keep occupying the screen.
-- DND is not dismiss: DND controls whether future remote display may enter; dismiss handles the current inserted message.
-- Restore writes the configured screen-state payload first, then re-enables lyric display when `RECEIVER_RESTORE_LYRIC=true`.
-- Lyric restore only restores the lyric switch. It does not save, replay, or promise to preserve lyric text; when music has lyrics, the device/official path is expected to continue supplying lyrics.
-- The default fallback screen-state payload `1,112,241,142,0,0,2` is the observed official preset baseline from the 2026-05-28 restore probe. It does not restore an arbitrary previous official custom text.
-- `displaySeconds` is still owned by the server state machine and does not locally block the receiver loop in this version.
-- Screen write failure skips ack and keeps the receiver running.
-- API, ack, and JSON failures are logged and do not crash the loop.
-- Receiver status update failures are logged and do not crash the loop.
-- Restore failure is logged and does not crash the loop.
-- Automatic MCHOSE HUB local-takeover detection is not implemented in this version. Use the local dismiss command to mark the current remote message read/closed. A future tray app or conservative HID readback detector can call the same dismiss helper.
-- Tray app packaging, Windows service/autostart, bot integrations, multi-device support, and long-text display strategy remain future changes. The first minimal browser sender is documented separately in `docs/web-message-sender.md`.
+For local development, `npm run receiver` also reads `.env.local` and `.env` automatically, with project `.env` values taking precedence so the receiver matches the local `npm run vercel:dev` API configuration. This lets the receiver reuse the same `RECEIVER_TOKEN`, `SEND_TOKEN`, and tuning values without manually exporting variables in each PowerShell session. Values in `receiver.config.json` still override `.env` files for the current machine, and real process environment variables override both. If an env file provides a receiver token but no API base URL, the receiver defaults to `http://localhost:3000` for the local Vercel dev server.
 
-## Manual Restore Check
+Treat `receiver.config.json` as the current machine's runtime config. It is useful for day-to-day local receiver runs, but it is no longer the default source for production private bundle generation.
 
-Suggested physical-device check:
+For safe local testing, keep a separate dev token pair in ignored `.env.local` and point it at the local dev server:
 
-1. Start `npm run receiver`.
-2. Send a `transient` with no active sticky and observe that the screen restores to the configured preset/lyrics after the transient is acked and `/next` becomes empty.
-3. Send a `sticky` and confirm it keeps displaying.
-4. Clear sticky and observe that the next empty poll restores to the configured preset/lyrics.
-5. Send sticky plus transient and confirm the transient is followed by sticky, not by baseline restore.
-6. While sticky is visible, write `{"command":"dismiss"}` to `receiver-control.json` and confirm the sticky is dismissed server-side and the display restores.
-7. Write `{"command":"dnd","enabled":true}` and confirm later polls do not write or ack remote messages until DND is disabled.
+```text
+REMOTE_MESSAGE_API_BASE_URL=http://localhost:3000
+SEND_TOKEN=<dev sender token>
+RECEIVER_TOKEN=<dev receiver token>
+REDIS_KEY_PREFIX=k20gt:remote-board-dev
+```
+
+This lets local Vercel dev and the local receiver test against a dev board namespace instead of the production sender/receiver token pair and production board keys.
+
+Important fields:
+
+- `apiBaseUrl`: deployed API base URL.
+- `receiverToken`: receiver-only token for board polling/displayed/dismiss/status updates.
+- `sendToken`: optional sender token for `receiver:status`.
+- `restoreScreenState`: fallback `cmd 9` payload, default `[1,112,241,142,0,0,2]`; use `[]` to skip `cmd 9` restore.
+- `dnd`: starts receiver-local Do Not Disturb when true.
+- `controlFile`: one-shot local control file consumed by the receiver loop.
+
+## Commands
+
+```powershell
+npm run receiver
+npm run receiver:install
+npm run receiver:start
+npm run receiver:runtime:status
+npm run receiver:stop
+npm run receiver:autostart:on
+npm run receiver:autostart:off
+npm run receiver:status
+npm run receiver:dnd:on
+npm run receiver:dnd:off
+npm run receiver:dismiss
+npm run receiver:restore
+npm run receiver:bundle
+```
+
+- `receiver` runs the foreground polling loop.
+- `receiver:status` reads cloud display status with `SEND_TOKEN` and prints receiver/DND/current board summary.
+- `receiver:dismiss` asks the running receiver to dismiss the current board by id and restore the local display.
+- `receiver:restore` restores the local display without dismissing the server-side board.
+- `receiver:dnd:on` turns on receiver-local DND. While DND is on, the receiver does not fetch, write, or report undisplayed boards.
+- `receiver:dnd:off` resumes board polling on later loop ticks.
+
+## Runtime Behavior
+
+- No current board and no active remote occupation: do nothing.
+- No current board after active remote occupation: run configured restore once.
+- New board id: write board text to the K20 GT screen, then report displayed.
+- Same active board id: do not rewrite the screen and do not report displayed again.
+- Screen write failure: do not report displayed and do not restore for that failed write.
+- Displayed-report failure: keep the local session active for the written board and continue polling.
+- DND is local authority. It does not clear the server board; it only blocks future local display writes while enabled.
+
+The shared HID writer and probe files are unchanged by the board-model simplification.
+
+## Private Receiver Bundle
+
+Use `npm run receiver:bundle` to generate a git-ignored private Windows bundle in `dist/k20gt-receiver-windows/`. The bundle includes `receiver.config.json`, wrapper `.cmd` files, and a README. The generated folder and zip can contain real tokens and must not be committed or uploaded publicly.
+
+The default bundle command is production-oriented. It reads config from explicit CLI arguments, then `BUNDLE_API_BASE_URL` / `BUNDLE_RECEIVER_TOKEN` / `BUNDLE_SEND_TOKEN`, then `REMOTE_MESSAGE_API_BASE_URL` / `RECEIVER_TOKEN` / `SEND_TOKEN` loaded from the process environment and local `.env`. It does not copy the root `receiver.config.json` and does not load `.env.local` unless you explicitly ask for local test behavior.
+
+This prevents a current-machine development config such as `http://localhost:3000` from being packaged for another Windows machine. The command rejects localhost or loopback API URLs by default; pass `--allow-localhost` only when intentionally generating a local test bundle.
+
+After receiver/runtime-impacting code changes, regenerate the bundle and zip:
+
+```powershell
+npm run receiver:bundle
+Compress-Archive -Path dist/k20gt-receiver-windows\* -DestinationPath dist/k20gt-receiver-windows.zip -Force
+```
+
+To intentionally copy a prepared config file instead of using env values:
+
+```powershell
+node scripts/prepare-receiver-bundle.js --config-source receiver.production.config.json
+```
+
+To intentionally generate a local test bundle from `.env.local`:
+
+```powershell
+node scripts/prepare-receiver-bundle.js --include-local-env --allow-localhost
+```
+
+## Verification Note
+
+The `simplify-remote-display-to-expiring-board` change was verified with unit/API/receiver/web behavior tests using mocked screen writes and restores. It was not verified on a live K20 GT HID display.

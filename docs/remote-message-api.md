@@ -1,116 +1,128 @@
-# Remote Message API
+# Remote Board API
 
-This document describes the cloud relay API. The first local receiver is documented separately in `docs/local-message-receiver.md`, and the minimal browser sender is documented in `docs/web-message-sender.md`.
+The cloud API now models the remote K20 GT display as one expiring board. There is no sticky/transient queue in the active product contract.
 
-## Environment Variables
+## Configuration
 
-Required:
+- `SEND_TOKEN`: bearer token for sender actions such as `POST /api/board`, `GET /api/board`, `DELETE /api/board`, and `GET /api/display/status`.
+- `RECEIVER_TOKEN`: bearer token for receiver actions such as `GET /api/board`, `POST /api/board/{id}/displayed`, `POST /api/board/{id}/dismiss`, and `POST /api/display/status`.
+- `MAX_MESSAGE_CHARS`: conservative text length limit, default `32`.
+- `MIN_BOARD_DURATION_SECONDS`: minimum board duration, default `1`.
+- `MAX_BOARD_DURATION_SECONDS`: maximum board duration, default `86400`.
+- `BOARD_HISTORY_LIMIT`: number of recent board ids retained for sender history, default `20`.
+- `SENDER_RATE_LIMIT_COUNT` / `SENDER_RATE_LIMIT_WINDOW_SECONDS`: simple sender-side rate limit.
 
-- `SEND_TOKEN`: bearer token for `POST /api/messages`.
-- `RECEIVER_TOKEN`: bearer token for `GET /api/messages/next`, `POST /api/messages/{id}/ack`, and `POST /api/messages/{id}/dismiss`.
-- `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL`: Upstash Redis REST URL.
-- `UPSTASH_REDIS_REST_TOKEN` or `KV_REST_API_TOKEN`: Upstash Redis REST token.
+Redis can use either Upstash names or Vercel KV-compatible names:
 
-Optional:
-
-- `MAX_MESSAGE_CHARS`: default `32`.
-- `SENDER_RATE_LIMIT_COUNT`: default `10`.
-- `SENDER_RATE_LIMIT_WINDOW_SECONDS`: default `60`.
-- `TRANSIENT_QUEUE_LIMIT`: default `5`.
-- `DEFAULT_TRANSIENT_TTL_SECONDS`: default `300`.
-- `DEFAULT_DISPLAY_SECONDS`: default `20`.
-- `MIN_TTL_SECONDS`: default `1`.
-- `MAX_TTL_SECONDS`: default `86400`.
-- `MIN_DISPLAY_SECONDS`: default `1`.
-- `MAX_DISPLAY_SECONDS`: default `300`.
-- `RECEIVER_STATUS_TTL_SECONDS`: default `30`; used by display status to decide whether the receiver is recently online.
-- `REDIS_KEY_PREFIX`: default `k20gt:remote-message`.
-
-## Local HTTP Checks
-
-Run the API locally with Vercel:
-
-```powershell
-npx vercel dev
+```text
+UPSTASH_REDIS_REST_URL
+UPSTASH_REDIS_REST_TOKEN
+KV_REST_API_URL
+KV_REST_API_TOKEN
 ```
 
-Create a sticky:
+## Endpoints
+
+Create or replace the current board:
 
 ```powershell
-curl.exe -X POST "http://localhost:3000/api/messages" `
+curl.exe -X POST "http://localhost:3000/api/board" `
   -H "Authorization: Bearer $env:SEND_TOKEN" `
   -H "Content-Type: application/json" `
-  -d "{\"type\":\"sticky\",\"text\":\"今天别熬夜\"}"
+  -d "{\"text\":\"今天别熬夜\",\"durationSeconds\":300}"
 ```
 
-Create a transient:
+Read the current unexpired board:
 
 ```powershell
-curl.exe -X POST "http://localhost:3000/api/messages" `
-  -H "Authorization: Bearer $env:SEND_TOKEN" `
-  -H "Content-Type: application/json" `
-  -d "{\"type\":\"transient\",\"text\":\"喝水\",\"ttlSeconds\":300,\"displaySeconds\":20}"
-```
-
-Pull the next message:
-
-```powershell
-curl.exe "http://localhost:3000/api/messages/next" `
-  -H "Authorization: Bearer $env:RECEIVER_TOKEN"
-```
-
-Ack a message:
-
-```powershell
-curl.exe -X POST "http://localhost:3000/api/messages/<message-id>/ack" `
-  -H "Authorization: Bearer $env:RECEIVER_TOKEN"
-```
-
-Dismiss/read a message from the receiver side:
-
-```powershell
-curl.exe -X POST "http://localhost:3000/api/messages/<message-id>/dismiss" `
-  -H "Authorization: Bearer $env:RECEIVER_TOKEN"
-```
-
-Clear the current sticky:
-
-```powershell
-curl.exe -X POST "http://localhost:3000/api/messages/clear" `
+curl.exe "http://localhost:3000/api/board" `
   -H "Authorization: Bearer $env:SEND_TOKEN"
 ```
 
-Read display status for the web sender:
+Clear the current board:
+
+```powershell
+curl.exe -X DELETE "http://localhost:3000/api/board" `
+  -H "Authorization: Bearer $env:SEND_TOKEN"
+```
+
+Report that the receiver displayed a board:
+
+```powershell
+curl.exe -X POST "http://localhost:3000/api/board/<board-id>/displayed" `
+  -H "Authorization: Bearer $env:RECEIVER_TOKEN"
+```
+
+Dismiss the current board from the receiver side:
+
+```powershell
+curl.exe -X POST "http://localhost:3000/api/board/<board-id>/dismiss" `
+  -H "Authorization: Bearer $env:RECEIVER_TOKEN"
+```
+
+Read display status:
 
 ```powershell
 curl.exe "http://localhost:3000/api/display/status" `
   -H "Authorization: Bearer $env:SEND_TOKEN"
 ```
 
-Update receiver status from the local receiver:
+Read recent board history:
+
+```powershell
+curl.exe "http://localhost:3000/api/board/history" `
+  -H "Authorization: Bearer $env:SEND_TOKEN"
+```
+
+Update receiver status:
 
 ```powershell
 curl.exe -X POST "http://localhost:3000/api/display/status" `
   -H "Authorization: Bearer $env:RECEIVER_TOKEN" `
   -H "Content-Type: application/json" `
-  -d "{\"dnd\":false,\"lastStatus\":\"ok\",\"remoteDisplayActive\":false}"
+  -d "{\"dnd\":false,\"remoteDisplayActive\":true,\"lastDisplayBoardId\":\"<board-id>\"}"
 ```
 
-## Dismiss Semantics
+## Board Shape
 
-`dismiss` is receiver-only. `SEND_TOKEN` cannot call it, because senders should not be able to forge local read/display state.
+Responses expose board summaries with:
 
-- Dismissing a current `sticky` marks it `expired`, removes it from current sticky, and prevents `/next` from returning it again.
-- Dismissing a pending or showing `transient` marks it `shown` and removes it from transient scheduling.
-- Unknown, expired, or shown messages return safely without changing unrelated state.
-- `ack` remains unchanged: it records that the receiver displayed a message. `dismiss` records that the local receiver/user is done with the current inserted message.
+```json
+{
+  "id": "board-id",
+  "text": "今天别熬夜",
+  "durationSeconds": 300,
+  "createdAt": "2026-05-29T00:00:00.000Z",
+  "updatedAt": "2026-05-29T00:00:00.000Z",
+  "expiresAt": "2026-05-29T00:05:00.000Z",
+  "displayedAt": null,
+  "lastDisplayedAt": null,
+  "endedAt": null,
+  "endedReason": null
+}
+```
 
-## Public Display State
+`endedReason` can be `expired`, `replaced`, `cleared`, or `dismissed`.
 
-Public message responses keep the internal `status` field and now also include:
+## Board History
 
-- `displayState`: user-facing state such as `active`, `showing`, `shown`, `dismissed`, `expired`, `replaced`, or `cleared`.
-- `endedReason`: terminal reason such as `shown`, `dismissed`, `cleared`, `replaced`, `ttl_expired`, or `showing_timeout`.
-- `endedAt`: timestamp when the terminal reason was recorded.
+`GET /api/board/history` requires `SEND_TOKEN` and returns newest-first recent board summaries:
 
-`GET /api/display/status` requires `SEND_TOKEN` and returns receiver status, current sticky summary, pending transient count, pending transient summaries, and the current receiver-reported display message when known. `POST /api/display/status` requires `RECEIVER_TOKEN`; the sender token cannot update receiver DND/status.
+```json
+{
+  "boards": [
+    {
+      "id": "board-id",
+      "text": "今天别熬夜",
+      "createdAt": "2026-05-29T00:00:00.000Z",
+      "isCurrent": true
+    }
+  ]
+}
+```
+
+History is a bounded recent-write index, not a permanent archive or lifecycle log. It begins with boards created after this feature is deployed, skips records that no longer exist, and does not require or expose receiver token access. The sender web page uses it only for write time, text, and the neutral current marker.
+
+## Legacy Routes
+
+The old `/api/messages` routes are retired and return HTTP `410` with `messages_api_retired`. Update clients to use `/api/board`.

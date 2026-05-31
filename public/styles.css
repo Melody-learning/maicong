@@ -251,6 +251,12 @@ button:disabled {
   border-top: 1px solid #d8e1d8;
 }
 
+.board-history {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #d8e1d8;
+}
+
 .display-status-header {
   display: flex;
   justify-content: space-between;
@@ -304,6 +310,65 @@ h2 {
   margin: 14px 0 0;
   color: #647269;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.history-state {
+  margin: 14px 0 0;
+  color: #647269;
+  line-height: 1.55;
+}
+
+.history-state.error {
+  color: #a33b2d;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.history-item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #d8e1d8;
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.history-item.current {
+  border-color: #2f7d5d;
+  background: #edf7f0;
+}
+
+.history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #647269;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.history-current {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #2f7d5d;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.history-text {
+  margin: 0;
+  color: #24352b;
+  font-weight: 800;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 

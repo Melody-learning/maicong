@@ -2,6 +2,18 @@
   "scripts": {
     "screen": "node k20gt-screen.js",
     "receiver": "node k20gt-receiver.js",
+    "receiver:status": "node k20gt-receiver-control.js status",
+    "receiver:dnd:on": "node k20gt-receiver-control.js dnd:on",
+    "receiver:dnd:off": "node k20gt-receiver-control.js dnd:off",
+    "receiver:dismiss": "node k20gt-receiver-control.js dismiss",
+    "receiver:restore": "node k20gt-receiver-control.js restore",
+    "receiver:bundle": "node scripts/prepare-receiver-bundle.js",
+    "receiver:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/install-receiver.ps1",
+    "receiver:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/start-receiver.ps1",
+    "receiver:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop-receiver.ps1",
+    "receiver:runtime:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/status-receiver.ps1",
+    "receiver:autostart:on": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/enable-autostart.ps1",
+    "receiver:autostart:off": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/disable-autostart.ps1",
     "probe": "node k20gt-probe.js",
     "vercel:dev": "vercel dev",
     "test": "vitest run"

@@ -1,0 +1,14 @@
+{
+  "apiBaseUrl": "https://your-vercel-project.vercel.app",
+  "receiverToken": "replace-with-random-receiver-token",
+  "sendToken": "replace-with-random-sender-token",
+  "pollIntervalMs": 3000,
+  "textLimit": 32,
+  "restoreOnEmpty": true,
+  "restoreLyric": true,
+  "restoreScreenState": [1, 112, 241, 142, 0, 0, 2],
+  "transientRestoreDelayMs": 0,
+  "dnd": false,
+  "controlFile": "receiver-control.json",
+  "logLevel": "info"
+}

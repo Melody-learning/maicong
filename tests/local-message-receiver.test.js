@@ -2,15 +2,18 @@ import { describe, it, expect, vi } from "vitest";
 import receiverModule from "../lib/local-message-receiver.js";
 
 const {
-  ackMessage,
   createControlState,
   createDisplaySession,
-  dismissCurrentMessage,
-  dismissMessage,
-  fetchNextMessage,
+  dismissBoard,
+  dismissCurrentBoard,
+  fetchCurrentBoard,
+  fetchDisplayStatus,
   getReceiverConfig,
+  loadEnvFilesSync,
+  loadReceiverConfigFileSync,
   makeApiUrl,
   processControlFile,
+  reportBoardDisplayed,
   reportReceiverStatus,
   runReceiverOnce,
   setDndEnabled,
@@ -31,6 +34,14 @@ function makeConfig(overrides = {}) {
     receiverToken: "receiver-secret",
     pollIntervalMs: 3000,
     logLevel: "info",
+    restoreOnEmpty: true,
+    restoreLyric: true,
+    restoreScreenState: [1, 112, 241, 142, 0, 0, 2],
+    transientRestoreDelayMs: 0,
+    dnd: false,
+    controlFile: "receiver-control.json",
+    statusTtlSeconds: 30,
+    statusUpdateIntervalMs: 0,
     ...overrides,
   };
 }
@@ -45,20 +56,26 @@ function makeLogger() {
 
 describe("local receiver configuration", () => {
   it("requires API base URL and receiver token", () => {
-    expect(() => getReceiverConfig({})).toThrow(/REMOTE_MESSAGE_API_BASE_URL/);
-    expect(() => getReceiverConfig({ REMOTE_MESSAGE_API_BASE_URL: "https://relay.example" })).toThrow(
-      /RECEIVER_TOKEN/
-    );
+    expect(() => getReceiverConfig({}, { configFile: {} })).toThrow(/REMOTE_MESSAGE_API_BASE_URL/);
+    expect(() =>
+      getReceiverConfig({ REMOTE_MESSAGE_API_BASE_URL: "https://relay.example" }, { configFile: {} })
+    ).toThrow(/RECEIVER_TOKEN/);
   });
 
   it("uses defaults and trims trailing slashes", () => {
-    const config = getReceiverConfig({
-      REMOTE_MESSAGE_API_BASE_URL: "https://relay.example///",
-      RECEIVER_TOKEN: "receiver-secret",
-    });
+    const config = getReceiverConfig(
+      {
+        REMOTE_MESSAGE_API_BASE_URL: "https://relay.example///",
+        RECEIVER_TOKEN: "receiver-secret",
+      },
+      { configFile: {} }
+    );
 
     expect(config.apiBaseUrl).toBe("https://relay.example");
+    expect(config.receiverToken).toBe("receiver-secret");
+    expect(config.sendToken).toBe("");
     expect(config.pollIntervalMs).toBe(3000);
+    expect(config.textLimit).toBe(null);
     expect(config.restoreOnEmpty).toBe(true);
     expect(config.restoreLyric).toBe(true);
     expect(config.restoreScreenState).toEqual([1, 112, 241, 142, 0, 0, 2]);
@@ -67,131 +84,341 @@ describe("local receiver configuration", () => {
     expect(config.controlFile).toBe("receiver-control.json");
     expect(config.statusTtlSeconds).toBe(30);
     expect(config.statusUpdateIntervalMs).toBe(0);
-    expect(makeApiUrl(config, "/api/messages/next")).toBe("https://relay.example/api/messages/next");
+    expect(makeApiUrl(config, "/api/board")).toBe("https://relay.example/api/board");
   });
 
-  it("parses custom restore configuration", () => {
-    const config = getReceiverConfig({
-      REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
-      RECEIVER_TOKEN: "receiver-secret",
-      RECEIVER_RESTORE_ON_EMPTY: "false",
-      RECEIVER_RESTORE_LYRIC: "0",
-      RECEIVER_RESTORE_SCREEN_STATE: "1,2,3,255",
-      RECEIVER_TRANSIENT_RESTORE_DELAY_MS: "250",
-      RECEIVER_DND: "true",
-      RECEIVER_CONTROL_FILE: ".receiver-control.json",
-      RECEIVER_STATUS_TTL_SECONDS: "45",
-      RECEIVER_STATUS_UPDATE_INTERVAL_MS: "5000",
-    });
+  it("uses config file values when env does not override them", () => {
+    const config = getReceiverConfig(
+      {},
+      {
+        configFile: {
+          apiBaseUrl: "https://relay.example///",
+          receiverToken: "receiver-from-file",
+          sendToken: "sender-from-file",
+          pollIntervalMs: 4500,
+          textLimit: 24,
+          restoreOnEmpty: false,
+          restoreLyric: false,
+          restoreScreenState: [1, 2, 3],
+          transientRestoreDelayMs: 125,
+          dnd: true,
+          controlFile: ".receiver-control.json",
+          logLevel: "debug",
+        },
+      }
+    );
 
+    expect(config.apiBaseUrl).toBe("https://relay.example");
+    expect(config.receiverToken).toBe("receiver-from-file");
+    expect(config.sendToken).toBe("sender-from-file");
+    expect(config.pollIntervalMs).toBe(4500);
+    expect(config.textLimit).toBe(24);
     expect(config.restoreOnEmpty).toBe(false);
     expect(config.restoreLyric).toBe(false);
-    expect(config.restoreScreenState).toEqual([1, 2, 3, 255]);
-    expect(config.transientRestoreDelayMs).toBe(250);
+    expect(config.restoreScreenState).toEqual([1, 2, 3]);
+    expect(config.transientRestoreDelayMs).toBe(125);
     expect(config.dnd).toBe(true);
     expect(config.controlFile).toBe(".receiver-control.json");
-    expect(config.statusTtlSeconds).toBe(45);
-    expect(config.statusUpdateIntervalMs).toBe(5000);
+    expect(config.logLevel).toBe("debug");
   });
 
-  it("allows empty restore screen state to disable cmd 9 restore", () => {
-    const config = getReceiverConfig({
-      REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
+  it("lets env override config file values", () => {
+    const config = getReceiverConfig(
+      {
+        REMOTE_MESSAGE_API_BASE_URL: "https://env.example",
+        RECEIVER_TOKEN: "receiver-from-env",
+        SEND_TOKEN: "sender-from-env",
+        RECEIVER_POLL_INTERVAL_MS: "5000",
+        RECEIVER_DND: "false",
+      },
+      {
+        configFile: {
+          apiBaseUrl: "https://file.example",
+          receiverToken: "receiver-from-file",
+          sendToken: "sender-from-file",
+          pollIntervalMs: 1000,
+          dnd: true,
+        },
+      }
+    );
+
+    expect(config.apiBaseUrl).toBe("https://env.example");
+    expect(config.receiverToken).toBe("receiver-from-env");
+    expect(config.sendToken).toBe("sender-from-env");
+    expect(config.pollIntervalMs).toBe(5000);
+    expect(config.dnd).toBe(false);
+  });
+
+  it("loads local env files using project .env precedence", () => {
+    const fsImpl = {
+      readFileSync: vi.fn((filePath) => {
+        if (filePath === ".env.local") {
+          return [
+            "REMOTE_MESSAGE_API_BASE_URL=https://local.example",
+            "RECEIVER_TOKEN=receiver-from-local",
+            "SEND_TOKEN=sender-from-local",
+          ].join("\n");
+        }
+        if (filePath === ".env") {
+          return [
+            "REMOTE_MESSAGE_API_BASE_URL=https://env.example",
+            "RECEIVER_TOKEN=receiver-from-env",
+            "SEND_TOKEN=sender-from-env",
+            "RECEIVER_POLL_INTERVAL_MS=4500",
+          ].join("\n");
+        }
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    const config = getReceiverConfig(
+      {},
+      {
+        configFile: {},
+        fsImpl,
+        loadEnvFiles: true,
+      }
+    );
+
+    expect(config.apiBaseUrl).toBe("https://env.example");
+    expect(config.receiverToken).toBe("receiver-from-env");
+    expect(config.sendToken).toBe("sender-from-env");
+    expect(config.pollIntervalMs).toBe(4500);
+  });
+
+  it("lets receiver.config.json override local env files", () => {
+    const fsImpl = {
+      readFileSync: vi.fn((filePath) => {
+        if (filePath === ".env") {
+          return [
+            "REMOTE_MESSAGE_API_BASE_URL=https://env.example",
+            "RECEIVER_TOKEN=receiver-from-env",
+          ].join("\n");
+        }
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    const config = getReceiverConfig(
+      {},
+      {
+        configFile: {
+          apiBaseUrl: "https://file.example",
+          receiverToken: "receiver-from-file",
+        },
+        fsImpl,
+        loadEnvFiles: true,
+      }
+    );
+
+    expect(config.apiBaseUrl).toBe("https://file.example");
+    expect(config.receiverToken).toBe("receiver-from-file");
+  });
+
+  it("defaults env-file local development receivers to localhost", () => {
+    const fsImpl = {
+      readFileSync: vi.fn((filePath) => {
+        if (filePath === ".env") return "RECEIVER_TOKEN=receiver-from-env";
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    const config = getReceiverConfig(
+      {},
+      {
+        configFile: {},
+        fsImpl,
+        loadEnvFiles: true,
+      }
+    );
+
+    expect(config.apiBaseUrl).toBe("http://localhost:3000");
+    expect(config.receiverToken).toBe("receiver-from-env");
+  });
+
+  it("parses dotenv-style receiver env files", () => {
+    const fsImpl = {
+      readFileSync: vi.fn((filePath) => {
+        if (filePath === ".env") {
+          return [
+            "# ignored",
+            "export RECEIVER_TOKEN=\"receiver-secret\"",
+            "SEND_TOKEN='sender-secret'",
+            "RECEIVER_LOG_LEVEL=debug # local logging",
+          ].join("\n");
+        }
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    expect(loadEnvFilesSync([".env", ".env.local"], fsImpl)).toEqual({
       RECEIVER_TOKEN: "receiver-secret",
-      RECEIVER_RESTORE_SCREEN_STATE: "",
+      SEND_TOKEN: "sender-secret",
+      RECEIVER_LOG_LEVEL: "debug",
     });
-
-    expect(config.restoreScreenState).toEqual([]);
   });
 
-  it("validates poll interval", () => {
-    expect(() =>
-      getReceiverConfig({
-        REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
-        RECEIVER_TOKEN: "receiver-secret",
-        RECEIVER_POLL_INTERVAL_MS: "nope",
-      })
-    ).toThrow(/RECEIVER_POLL_INTERVAL_MS/);
+  it("does not let empty local token values hide earlier env-file secrets", () => {
+    const fsImpl = {
+      readFileSync: vi.fn((filePath) => {
+        if (filePath === ".env") {
+          return [
+            "REMOTE_MESSAGE_API_BASE_URL=https://env.example",
+            "RECEIVER_TOKEN=receiver-secret",
+            "SEND_TOKEN=sender-secret",
+          ].join("\n");
+        }
+        if (filePath === ".env.local") {
+          return [
+            "RECEIVER_TOKEN=",
+            "SEND_TOKEN=",
+          ].join("\n");
+        }
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    expect(loadEnvFilesSync([".env", ".env.local"], fsImpl)).toMatchObject({
+      REMOTE_MESSAGE_API_BASE_URL: "https://env.example",
+      RECEIVER_TOKEN: "receiver-secret",
+      SEND_TOKEN: "sender-secret",
+    });
   });
 
-  it("validates restore configuration", () => {
-    expect(() =>
-      getReceiverConfig({
+  it("treats a missing config file as empty config", () => {
+    const fsImpl = {
+      readFileSync: vi.fn(() => {
+        const error = new Error("missing");
+        error.code = "ENOENT";
+        throw error;
+      }),
+    };
+
+    const config = getReceiverConfig(
+      {
         REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
         RECEIVER_TOKEN: "receiver-secret",
-        RECEIVER_RESTORE_ON_EMPTY: "maybe",
-      })
+      },
+      { fsImpl }
+    );
+
+    expect(config.apiBaseUrl).toBe("https://relay.example");
+    expect(fsImpl.readFileSync).toHaveBeenCalledWith("receiver.config.json", "utf8");
+  });
+
+  it("reports malformed config files and invalid restore config", () => {
+    const fsImpl = { readFileSync: vi.fn(() => "{") };
+    expect(() => loadReceiverConfigFileSync("receiver.config.json", fsImpl)).toThrow(
+      /Invalid receiver config file receiver\.config\.json/
+    );
+
+    expect(() =>
+      getReceiverConfig(
+        {
+          REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
+          RECEIVER_TOKEN: "receiver-secret",
+          RECEIVER_RESTORE_ON_EMPTY: "maybe",
+        },
+        { configFile: {} }
+      )
     ).toThrow(/RECEIVER_RESTORE_ON_EMPTY/);
 
     expect(() =>
-      getReceiverConfig({
-        REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
-        RECEIVER_TOKEN: "receiver-secret",
-        RECEIVER_RESTORE_SCREEN_STATE: "1,999",
-      })
+      getReceiverConfig(
+        {
+          REMOTE_MESSAGE_API_BASE_URL: "https://relay.example",
+          RECEIVER_TOKEN: "receiver-secret",
+          RECEIVER_RESTORE_SCREEN_STATE: "1,999",
+        },
+        { configFile: {} }
+      )
     ).toThrow(/RECEIVER_RESTORE_SCREEN_STATE/);
   });
 });
 
 describe("local receiver API helpers", () => {
-  it("fetches next message with receiver bearer token", async () => {
-    const message = { id: "msg_1", type: "sticky", text: "hello" };
-    const fetchImpl = vi.fn(async () => jsonResponse({ message }));
+  it("fetches current board with receiver bearer token", async () => {
+    const board = { id: "board_1", text: "hello" };
+    const fetchImpl = vi.fn(async () => jsonResponse({ board }));
 
-    await expect(fetchNextMessage(makeConfig(), fetchImpl)).resolves.toEqual(message);
+    await expect(fetchCurrentBoard(makeConfig(), fetchImpl)).resolves.toEqual(board);
 
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/messages/next", {
+    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/board", {
       method: "GET",
       headers: { Authorization: "Bearer receiver-secret" },
     });
   });
 
-  it("acks a message with receiver bearer token", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ acknowledged: true }));
+  it("reports displayed and dismisses a board with receiver bearer token", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ displayed: true, dismissed: true }));
 
-    await expect(ackMessage(makeConfig(), "msg/1", fetchImpl)).resolves.toEqual({ acknowledged: true });
+    await expect(reportBoardDisplayed(makeConfig(), "board/1", fetchImpl)).resolves.toEqual({
+      displayed: true,
+      dismissed: true,
+    });
+    await expect(dismissBoard(makeConfig(), "board/1", fetchImpl)).resolves.toEqual({
+      displayed: true,
+      dismissed: true,
+    });
 
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/messages/msg%2F1/ack", {
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://relay.example/api/board/board%2F1/displayed", {
+      method: "POST",
+      headers: { Authorization: "Bearer receiver-secret" },
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://relay.example/api/board/board%2F1/dismiss", {
       method: "POST",
       headers: { Authorization: "Bearer receiver-secret" },
     });
   });
 
-  it("dismisses a message with receiver bearer token", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ dismissed: true }));
+  it("updates receiver status with board fields and reads display status with send token", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ receiver: { online: true } }));
 
-    await expect(dismissMessage(makeConfig(), "msg/1", fetchImpl)).resolves.toEqual({ dismissed: true });
-
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/messages/msg%2F1/dismiss", {
-      method: "POST",
-      headers: { Authorization: "Bearer receiver-secret" },
+    await expect(updateReceiverStatus(makeConfig(), { lastDisplayBoardId: "board_1" }, fetchImpl)).resolves.toEqual({
+      receiver: { online: true },
     });
-  });
-
-  it("updates receiver status with receiver bearer token", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ receiver: { dnd: true } }));
-
-    await expect(updateReceiverStatus(makeConfig(), { dnd: true }, fetchImpl)).resolves.toEqual({
-      receiver: { dnd: true },
+    await expect(fetchDisplayStatus(makeConfig({ sendToken: "sender-secret" }), fetchImpl)).resolves.toEqual({
+      receiver: { online: true },
     });
 
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/display/status", {
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://relay.example/api/display/status", {
       method: "POST",
       headers: {
         Authorization: "Bearer receiver-secret",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ dnd: true }),
+      body: JSON.stringify({ lastDisplayBoardId: "board_1" }),
     });
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://relay.example/api/display/status", {
+      method: "GET",
+      headers: { Authorization: "Bearer sender-secret" },
+    });
+  });
+
+  it("does not use receiver token for display status reads", async () => {
+    const fetchImpl = vi.fn();
+
+    await expect(fetchDisplayStatus(makeConfig(), fetchImpl)).rejects.toThrow(/SEND_TOKEN/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
 describe("runReceiverOnce", () => {
-  it("dismisses current message from a control file, restores, and removes the file", async () => {
+  it("dismisses current board from a control file, restores, and removes the file", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ receiver: {} }))
-      .mockResolvedValueOnce(jsonResponse({ dismissed: true, message: { id: "msg_1" } }))
+      .mockResolvedValueOnce(jsonResponse({ dismissed: true, board: { id: "board_1" } }))
       .mockResolvedValueOnce(jsonResponse({ receiver: {} }));
     const restoreDisplay = vi.fn(async () => ({ screenState: 64, lyric: 64 }));
     const fsImpl = {
@@ -199,8 +426,8 @@ describe("runReceiverOnce", () => {
       unlink: vi.fn(async () => {}),
     };
     const displaySession = createDisplaySession({
-      currentMessageId: "msg_1",
-      currentMessageType: "sticky",
+      currentBoardId: "board_1",
+      currentBoardActive: true,
       remoteDisplayActive: true,
     });
 
@@ -216,7 +443,7 @@ describe("runReceiverOnce", () => {
 
     expect(result.ok).toBe(true);
     expect(result.command).toEqual({ command: "dismiss" });
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/messages/msg_1/dismiss", {
+    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/board/board_1/dismiss", {
       method: "POST",
       headers: { Authorization: "Bearer receiver-secret" },
     });
@@ -225,25 +452,57 @@ describe("runReceiverOnce", () => {
     expect(displaySession.remoteDisplayActive).toBe(false);
   });
 
-  it("does not call dismiss endpoint when dismiss is requested without current message", async () => {
-    const fetchImpl = vi.fn();
-    const restoreDisplay = vi.fn();
-    const displaySession = createDisplaySession();
+  it("restores from a control file and removes the file", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ receiver: {} }));
+    const restoreDisplay = vi.fn(async () => ({ screenState: 64, lyric: 64 }));
+    const fsImpl = {
+      readFile: vi.fn(async () => JSON.stringify({ command: "restore" })),
+      unlink: vi.fn(async () => {}),
+    };
+    const displaySession = createDisplaySession({
+      currentBoardId: "board_1",
+      currentBoardActive: true,
+      remoteDisplayActive: true,
+    });
 
-    const result = await dismissCurrentMessage({
-      config: makeConfig({ logLevel: "debug" }),
+    const result = await processControlFile({
+      config: makeConfig({ controlFile: "receiver-control.json" }),
       fetchImpl,
       restoreDisplay,
       displaySession,
+      controlState: createControlState(),
+      fsImpl,
       logger: makeLogger(),
     });
 
-    expect(result).toEqual({ ok: true, dismissed: false, restored: false, message: null });
+    expect(result.ok).toBe(true);
+    expect(result.command).toEqual({ command: "restore" });
+    expect(result.restored).toBe(true);
+    expect(restoreDisplay).toHaveBeenCalledWith({
+      screenStatePayload: [1, 112, 241, 142, 0, 0, 2],
+      restoreLyric: true,
+    });
+    expect(displaySession.remoteDisplayActive).toBe(false);
+  });
+
+  it("does not call dismiss endpoint when dismiss is requested without current board", async () => {
+    const fetchImpl = vi.fn();
+    const restoreDisplay = vi.fn();
+
+    const result = await dismissCurrentBoard({
+      config: makeConfig({ logLevel: "debug" }),
+      fetchImpl,
+      restoreDisplay,
+      displaySession: createDisplaySession(),
+      logger: makeLogger(),
+    });
+
+    expect(result).toEqual({ ok: true, dismissed: false, restored: false, board: null, message: null });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(restoreDisplay).not.toHaveBeenCalled();
   });
 
-  it("DND on skips next, write, and ack", async () => {
+  it("DND on skips board fetch, write, and displayed report", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ receiver: {} }));
     const writeScreenText = vi.fn();
 
@@ -254,14 +513,14 @@ describe("runReceiverOnce", () => {
       logger: makeLogger(),
     });
 
-    expect(result).toEqual({ ok: true, dnd: true, message: null });
+    expect(result).toEqual({ ok: true, dnd: true, board: null, message: null });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(writeScreenText).not.toHaveBeenCalled();
   });
 
   it("DND on while active remote display restores once", async () => {
     const restoreDisplay = vi.fn(async () => ({ screenState: 64, lyric: 64 }));
-    const displaySession = createDisplaySession({ remoteDisplayActive: true, currentMessageId: "msg_1" });
+    const displaySession = createDisplaySession({ remoteDisplayActive: true, currentBoardId: "board_1" });
     const controlState = createControlState();
 
     const result = await setDndEnabled({
@@ -282,246 +541,110 @@ describe("runReceiverOnce", () => {
     expect(restoreDisplay).toHaveBeenCalledTimes(1);
   });
 
-  it("DND off resumes normal display", async () => {
-    const message = { id: "msg_1", type: "sticky", text: "hello", displaySeconds: 20 };
+  it("writes a new board and reports displayed after success", async () => {
+    const board = { id: "board_1", text: "今天别熬夜", durationSeconds: 30 };
     const fetchImpl = vi.fn(async (url) => {
       if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) return jsonResponse({ message });
-      return jsonResponse({ acknowledged: true });
-    });
-    const controlState = createControlState({ dnd: true });
-    await setDndEnabled({
-      enabled: false,
-      config: makeConfig(),
-      controlState,
-      displaySession: createDisplaySession(),
-      fetchImpl: vi.fn(async () => jsonResponse({ receiver: {} })),
-      logger: makeLogger(),
-    });
-
-    const result = await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText: vi.fn(async () => 64),
-      controlState,
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.message).toEqual(message);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
-  });
-
-  it("dismiss failure does not crash and keeps session active", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ error: "bad" }, { ok: false, status: 500 }));
-    const restoreDisplay = vi.fn();
-    const displaySession = createDisplaySession({ remoteDisplayActive: true, currentMessageId: "msg_1" });
-
-    const result = await dismissCurrentMessage({
-      config: makeConfig(),
-      fetchImpl,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("dismiss");
-    expect(restoreDisplay).not.toHaveBeenCalled();
-    expect(displaySession.remoteDisplayActive).toBe(true);
-  });
-
-  it("dismiss restore failure does not crash and keeps session active", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ dismissed: true }));
-    const restoreDisplay = vi.fn(async () => {
-      throw new Error("restore failed");
-    });
-    const displaySession = createDisplaySession({ remoteDisplayActive: true, currentMessageId: "msg_1" });
-
-    const result = await dismissCurrentMessage({
-      config: makeConfig(),
-      fetchImpl,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("restore");
-    expect(displaySession.remoteDisplayActive).toBe(true);
-  });
-
-  it("leaves invalid control files in place", async () => {
-    const fsImpl = {
-      readFile: vi.fn(async () => "{"),
-      unlink: vi.fn(),
-    };
-
-    const result = await processControlFile({
-      config: makeConfig({ controlFile: "receiver-control.json" }),
-      displaySession: createDisplaySession(),
-      controlState: createControlState(),
-      fsImpl,
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("control");
-    expect(fsImpl.unlink).not.toHaveBeenCalled();
-  });
-
-  it("does not write or ack when next returns null", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ receiver: {} }))
-      .mockResolvedValueOnce(jsonResponse({ message: null }))
-      .mockResolvedValueOnce(jsonResponse({ receiver: {} }));
-    const writeScreenText = vi.fn();
-    const restoreDisplay = vi.fn();
-    const logger = makeLogger();
-
-    const result = await runReceiverOnce({
-      config: makeConfig({ logLevel: "debug" }),
-      fetchImpl,
-      writeScreenText,
-      restoreDisplay,
-      logger,
-    });
-
-    expect(result).toEqual({ ok: true, message: null, restored: false });
-    expect(writeScreenText).not.toHaveBeenCalled();
-    expect(restoreDisplay).not.toHaveBeenCalled();
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-  });
-
-  it("restores once when next returns null after remote display was active", async () => {
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return jsonResponse({ message: null });
-    });
-    const writeScreenText = vi.fn();
-    const restoreDisplay = vi.fn(async () => ({ screenState: 64, lyric: 64 }));
-    const displaySession = createDisplaySession({ remoteDisplayActive: true, lastDisplayedMessageId: "msg_1" });
-
-    const first = await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-    const second = await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-
-    expect(first).toEqual({ ok: true, message: null, restored: true });
-    expect(second).toEqual({ ok: true, message: null, restored: false });
-    expect(restoreDisplay).toHaveBeenCalledTimes(1);
-    expect(restoreDisplay).toHaveBeenCalledWith({
-      screenStatePayload: [1, 112, 241, 142, 0, 0, 2],
-      restoreLyric: true,
-    });
-    expect(displaySession.remoteDisplayActive).toBe(false);
-  });
-
-  it("does not restore when restore-on-empty is disabled", async () => {
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return jsonResponse({ message: null });
-    });
-    const restoreDisplay = vi.fn();
-    const displaySession = createDisplaySession({ remoteDisplayActive: true });
-
-    const result = await runReceiverOnce({
-      config: makeConfig({ restoreOnEmpty: false }),
-      fetchImpl,
-      writeScreenText: vi.fn(),
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-
-    expect(result).toEqual({ ok: true, message: null, restored: false });
-    expect(restoreDisplay).not.toHaveBeenCalled();
-    expect(displaySession.remoteDisplayActive).toBe(true);
-  });
-
-  it("writes returned sticky message and acks after success", async () => {
-    const message = { id: "msg_1", type: "sticky", text: "今天别熬夜", displaySeconds: 20 };
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) return jsonResponse({ message });
-      return jsonResponse({ acknowledged: true });
+      if (url.endsWith("/api/board")) return jsonResponse({ board });
+      return jsonResponse({ displayed: true, board });
     });
     const writeScreenText = vi.fn(async () => 64);
-    const restoreDisplay = vi.fn();
     const displaySession = createDisplaySession();
 
     const result = await runReceiverOnce({
       config: makeConfig(),
       fetchImpl,
       writeScreenText,
-      restoreDisplay,
+      restoreDisplay: vi.fn(),
       displaySession,
       logger: makeLogger(),
     });
 
     expect(result.ok).toBe(true);
-    expect(result.message).toEqual(message);
-    expect(writeScreenText).toHaveBeenCalledWith(message.text, message);
-    expect(restoreDisplay).not.toHaveBeenCalled();
+    expect(result.board).toEqual(board);
+    expect(writeScreenText).toHaveBeenCalledWith(board.text, board);
     expect(displaySession.remoteDisplayActive).toBe(true);
-    expect(displaySession.activeStickyId).toBe("msg_1");
-    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/messages/msg_1/ack", {
+    expect(displaySession.currentBoardId).toBe("board_1");
+    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/board/board_1/displayed", {
       method: "POST",
       headers: { Authorization: "Bearer receiver-secret" },
     });
   });
 
-  it("writes returned transient without local displaySeconds blocking", async () => {
-    const message = { id: "msg_2", type: "transient", text: "喝水", displaySeconds: 120 };
+  it("does not rewrite or report displayed for the same active board id", async () => {
+    const board = { id: "board_1", text: "今天别熬夜", durationSeconds: 30 };
     const fetchImpl = vi.fn(async (url) => {
       if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) return jsonResponse({ message });
-      return jsonResponse({ acknowledged: true });
+      return jsonResponse({ board });
     });
-    const writeScreenText = vi.fn(async () => 64);
+    const writeScreenText = vi.fn();
+    const displaySession = createDisplaySession({
+      currentBoardId: "board_1",
+      currentBoardActive: true,
+      remoteDisplayActive: true,
+    });
 
-    await runReceiverOnce({
-      config: makeConfig(),
+    const result = await runReceiverOnce({
+      config: makeConfig({ logLevel: "debug" }),
       fetchImpl,
       writeScreenText,
+      restoreDisplay: vi.fn(),
+      displaySession,
       logger: makeLogger(),
     });
 
-    expect(writeScreenText).toHaveBeenCalledTimes(1);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(result.ok).toBe(true);
+    expect(result.unchanged).toBe(true);
+    expect(writeScreenText).not.toHaveBeenCalled();
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes("/displayed"))).toBe(false);
   });
 
-  it("restores after transient ack when a later next returns null", async () => {
-    const message = { id: "msg_2", type: "transient", text: "喝水", displaySeconds: 2 };
+  it("retries displayed report for the same board without rewriting the screen", async () => {
+    const board = { id: "board_1", text: "今天别熬夜", durationSeconds: 30 };
     const fetchImpl = vi.fn(async (url) => {
       if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) {
-        return fetchImpl.mock.calls.filter(([calledUrl]) => calledUrl.endsWith("/api/messages/next")).length === 1
-          ? jsonResponse({ message })
-          : jsonResponse({ message: null });
-      }
-      return jsonResponse({ acknowledged: true });
+      if (url.endsWith("/api/board")) return jsonResponse({ board });
+      return jsonResponse({ displayed: true, board });
+    });
+    const writeScreenText = vi.fn();
+    const displaySession = createDisplaySession({
+      currentBoardId: "board_1",
+      currentBoardActive: true,
+      displayedReportPending: true,
+      remoteDisplayActive: true,
+    });
+
+    const result = await runReceiverOnce({
+      config: makeConfig({ logLevel: "debug" }),
+      fetchImpl,
+      writeScreenText,
+      restoreDisplay: vi.fn(),
+      displaySession,
+      logger: makeLogger(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.displayedRetried).toBe(true);
+    expect(writeScreenText).not.toHaveBeenCalled();
+    expect(displaySession.displayedReportPending).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example/api/board/board_1/displayed", {
+      method: "POST",
+      headers: { Authorization: "Bearer receiver-secret" },
+    });
+  });
+
+  it("restores once when board becomes empty after remote display was active", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
+      return jsonResponse({ board: null });
     });
     const restoreDisplay = vi.fn(async () => ({ screenState: 64, lyric: 64 }));
-    const displaySession = createDisplaySession();
+    const displaySession = createDisplaySession({ remoteDisplayActive: true, currentBoardId: "board_1" });
 
     const first = await runReceiverOnce({
       config: makeConfig(),
       fetchImpl,
-      writeScreenText: vi.fn(async () => 64),
+      writeScreenText: vi.fn(),
       restoreDisplay,
       displaySession,
       logger: makeLogger(),
@@ -529,182 +652,121 @@ describe("runReceiverOnce", () => {
     const second = await runReceiverOnce({
       config: makeConfig(),
       fetchImpl,
-      writeScreenText: vi.fn(async () => 64),
+      writeScreenText: vi.fn(),
       restoreDisplay,
       displaySession,
       logger: makeLogger(),
     });
 
-    expect(first.ok).toBe(true);
-    expect(second.restored).toBe(true);
+    expect(first.restored).toBe(true);
+    expect(second.restored).toBe(false);
     expect(restoreDisplay).toHaveBeenCalledTimes(1);
     expect(displaySession.remoteDisplayActive).toBe(false);
   });
 
-  it("writes sticky after transient ack without restoring between remote targets", async () => {
-    const transient = { id: "msg_2", type: "transient", text: "喝水", displaySeconds: 2 };
-    const sticky = { id: "msg_5", type: "sticky", text: "等你回家", displaySeconds: 20 };
-    const nextMessages = [transient, sticky];
+  it("does not report displayed when screen write fails", async () => {
+    const board = { id: "board_3", text: "fail" };
     const fetchImpl = vi.fn(async (url) => {
       if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) return jsonResponse({ message: nextMessages.shift() });
-      return jsonResponse({ acknowledged: true });
-    });
-    const writeScreenText = vi.fn(async () => 64);
-    const restoreDisplay = vi.fn();
-    const displaySession = createDisplaySession();
-
-    await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-    await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText,
-      restoreDisplay,
-      displaySession,
-      logger: makeLogger(),
-    });
-
-    expect(writeScreenText).toHaveBeenNthCalledWith(1, transient.text, transient);
-    expect(writeScreenText).toHaveBeenNthCalledWith(2, sticky.text, sticky);
-    expect(restoreDisplay).not.toHaveBeenCalled();
-    expect(displaySession.remoteDisplayActive).toBe(true);
-    expect(displaySession.activeStickyId).toBe("msg_5");
-  });
-
-  it("does not ack when screen write fails", async () => {
-    const message = { id: "msg_3", type: "sticky", text: "fail" };
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return jsonResponse({ message });
+      return jsonResponse({ board });
     });
     const writeScreenText = vi.fn(async () => {
       throw new Error("device missing");
     });
-    const restoreDisplay = vi.fn();
-    const displaySession = createDisplaySession();
 
     const result = await runReceiverOnce({
       config: makeConfig(),
       fetchImpl,
       writeScreenText,
-      restoreDisplay,
-      displaySession,
+      restoreDisplay: vi.fn(),
+      displaySession: createDisplaySession(),
       logger: makeLogger(),
     });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("write");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(restoreDisplay).not.toHaveBeenCalled();
-    expect(displaySession.remoteDisplayActive).toBe(false);
+    expect(fetchImpl.mock.calls.some(([url]) => url.includes("/displayed"))).toBe(false);
   });
 
-  it("survives next request failures", async () => {
+  it("keeps the display session active when displayed reporting fails", async () => {
+    const board = { id: "board_4", text: "hello" };
     const fetchImpl = vi.fn(async (url) => {
       if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return jsonResponse({ error: "nope" }, { ok: false, status: 503 });
-    });
-    const writeScreenText = vi.fn();
-
-    const result = await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText,
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("next");
-    expect(writeScreenText).not.toHaveBeenCalled();
-  });
-
-  it("survives invalid JSON responses", async () => {
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return {
-        ok: true,
-        status: 200,
-        text: vi.fn(async () => "{"),
-      };
-    });
-
-    const result = await runReceiverOnce({
-      config: makeConfig(),
-      fetchImpl,
-      writeScreenText: vi.fn(),
-      logger: makeLogger(),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("next");
-  });
-
-  it("logs ack failures without throwing", async () => {
-    const message = { id: "msg_4", type: "sticky", text: "hello" };
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      if (url.endsWith("/api/messages/next")) return jsonResponse({ message });
+      if (url.endsWith("/api/board")) return jsonResponse({ board });
       return jsonResponse({ error: "bad" }, { ok: false, status: 500 });
     });
+    const displaySession = createDisplaySession();
 
     const result = await runReceiverOnce({
       config: makeConfig(),
       fetchImpl,
       writeScreenText: vi.fn(async () => 64),
+      displaySession,
       logger: makeLogger(),
     });
 
     expect(result.ok).toBe(false);
-    expect(result.stage).toBe("ack");
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(result.stage).toBe("displayed");
+    expect(displaySession.remoteDisplayActive).toBe(true);
+    expect(displaySession.currentBoardId).toBe("board_4");
+    expect(displaySession.displayedReportPending).toBe(true);
   });
 
-  it("logs restore failures without crashing the receiver loop", async () => {
-    const fetchImpl = vi.fn(async (url) => {
-      if (url.endsWith("/api/display/status")) return jsonResponse({ receiver: {} });
-      return jsonResponse({ message: null });
+  it("survives board request, restore, invalid JSON, and status failures", async () => {
+    const writeScreenText = vi.fn();
+    const logger = makeLogger();
+
+    const boardFailure = await runReceiverOnce({
+      config: makeConfig(),
+      fetchImpl: vi.fn(async (url) =>
+        url.endsWith("/api/display/status")
+          ? jsonResponse({ receiver: {} })
+          : jsonResponse({ error: "nope" }, { ok: false, status: 503 })
+      ),
+      writeScreenText,
+      logger,
     });
+    expect(boardFailure.ok).toBe(false);
+    expect(boardFailure.stage).toBe("board");
+    expect(writeScreenText).not.toHaveBeenCalled();
+
+    const invalidJson = await runReceiverOnce({
+      config: makeConfig(),
+      fetchImpl: vi.fn(async (url) =>
+        url.endsWith("/api/display/status")
+          ? jsonResponse({ receiver: {} })
+          : { ok: true, status: 200, text: vi.fn(async () => "{") }
+      ),
+      writeScreenText: vi.fn(),
+      logger,
+    });
+    expect(invalidJson.ok).toBe(false);
+    expect(invalidJson.stage).toBe("board");
+
     const restoreDisplay = vi.fn(async () => {
       throw new Error("restore failed");
     });
-    const logger = makeLogger();
-    const displaySession = createDisplaySession({ remoteDisplayActive: true });
-
-    const result = await runReceiverOnce({
+    const restoreFailure = await runReceiverOnce({
       config: makeConfig(),
-      fetchImpl,
+      fetchImpl: vi.fn(async (url) =>
+        url.endsWith("/api/display/status") ? jsonResponse({ receiver: {} }) : jsonResponse({ board: null })
+      ),
       writeScreenText: vi.fn(),
       restoreDisplay,
-      displaySession,
+      displaySession: createDisplaySession({ remoteDisplayActive: true }),
       logger,
     });
+    expect(restoreFailure.ok).toBe(false);
+    expect(restoreFailure.stage).toBe("restore");
 
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe("restore");
-    expect(logger.error).toHaveBeenCalledWith("[receiver] display restore failed:", "restore failed");
-    expect(displaySession.remoteDisplayActive).toBe(true);
-  });
-
-  it("status update failures do not throw", async () => {
-    const logger = makeLogger();
-    const fetchImpl = vi.fn(async () => jsonResponse({ error: "bad" }, { ok: false, status: 500 }));
-
-    const result = await reportReceiverStatus({
+    const statusFailure = await reportReceiverStatus({
       config: makeConfig(),
-      fetchImpl,
+      fetchImpl: vi.fn(async () => jsonResponse({ error: "bad" }, { ok: false, status: 500 })),
       displaySession: createDisplaySession(),
       controlState: createControlState(),
       logger,
     });
-
-    expect(result.ok).toBe(false);
+    expect(statusFailure.ok).toBe(false);
     expect(logger.error).toHaveBeenCalledWith("[receiver] status update failed:", expect.any(String));
   });
 });

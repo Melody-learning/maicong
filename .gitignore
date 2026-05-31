@@ -5,6 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+receiver.config.json
 
 # Vercel local metadata
 .vercel/
@@ -19,6 +20,7 @@ tmp/
 temp/
 
 # Logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -26,6 +28,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Test and cache output
+.receiver/
 coverage/
 .nyc_output/
 .cache/

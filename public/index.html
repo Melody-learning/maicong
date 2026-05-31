@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>K20 GT 小纸条</title>
+    <title>K20 GT 小黑板</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -11,7 +11,7 @@
       <section class="tool" aria-labelledby="page-title">
         <div class="heading">
           <p class="eyebrow">K20 GT 屏幕投递</p>
-          <h1 id="page-title">发一条小纸条</h1>
+          <h1 id="page-title">写到小黑板</h1>
           <p class="hint">短消息更可靠。发送 token 只保存在这个浏览器里，不要填写 receiver token。</p>
         </div>
 
@@ -44,27 +44,41 @@
             ></textarea>
           </label>
 
-          <fieldset class="intent-group">
-            <legend>发送方式</legend>
+          <fieldset class="intent-group" id="duration-group">
+            <legend>保留多久</legend>
             <label class="intent-option">
-              <input type="radio" name="intent" value="sticky" checked>
+              <input type="radio" name="duration" value="30" checked>
               <span>
-                <strong>贴上去</strong>
-                <small>作为当前屏幕文字</small>
+                <strong>30 秒</strong>
+                <small>看一眼就释放</small>
               </span>
             </label>
             <label class="intent-option">
-              <input type="radio" name="intent" value="transient">
+              <input type="radio" name="duration" value="300">
               <span>
-                <strong>显示一下</strong>
-                <small>临时插入一条提醒</small>
+                <strong>5 分钟</strong>
+                <small>短提醒</small>
+              </span>
+            </label>
+            <label class="intent-option">
+              <input type="radio" name="duration" value="1800">
+              <span>
+                <strong>30 分钟</strong>
+                <small>放一会儿</small>
+              </span>
+            </label>
+            <label class="intent-option">
+              <input type="radio" name="duration" value="3600">
+              <span>
+                <strong>1 小时</strong>
+                <small>稍长一点</small>
               </span>
             </label>
           </fieldset>
 
           <div class="actions">
-            <button id="send-button" class="primary" type="submit">发送</button>
-            <button id="clear-button" class="secondary" type="button">清空贴上去</button>
+            <button id="send-button" class="primary" type="submit">写上去</button>
+            <button id="clear-button" class="secondary" type="button">清空小黑板</button>
           </div>
         </form>
 
@@ -89,15 +103,24 @@
               <dd id="dnd-state">未刷新</dd>
             </div>
             <div>
-              <dt>贴上去</dt>
-              <dd id="sticky-state">未刷新</dd>
+              <dt>小黑板</dt>
+              <dd id="board-state">未刷新</dd>
             </div>
             <div>
-              <dt>临时队列</dt>
-              <dd id="transient-state">未刷新</dd>
+              <dt>过期时间</dt>
+              <dd id="expires-state">未刷新</dd>
             </div>
           </dl>
           <p id="status-detail" class="status-detail">勿扰由 receiver 本地控制。</p>
+        </section>
+
+        <section class="board-history" aria-labelledby="board-history-title">
+          <div>
+            <p class="eyebrow">最近小黑板</p>
+            <h2 id="board-history-title">刚刚写过什么</h2>
+          </div>
+          <p id="history-state" class="history-state">输入 SEND_TOKEN 后会显示最近小黑板。</p>
+          <div id="history-list" class="history-list" aria-live="polite"></div>
         </section>
       </section>
     </main>
